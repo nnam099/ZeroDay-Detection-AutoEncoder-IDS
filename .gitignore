@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# Model files (quan trọng - tránh push file lớn)
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.joblib
+*.pkl
+*.h5
+
+# Data files
+*.csv
+*.pcap
+*.pcapng
+data/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Output
+outputs/
+results/

@@ -1,0 +1,21 @@
+model:
+  seq_length: 10
+  latent_dim: 4
+  feature_size: 5
+  model_path: "models/transformer_vae_v1.pth"
+  lr: 0.001
+
+detection:
+  num_passes: 20
+  # Ngưỡng sẽ được cập nhật tự động bởi threshold_tuning.py
+  threshold_re: 0.15 
+  threshold_u: 0.02
+
+paths:
+  log_raw: "/path/to/apache/access.log" # placeholder
+  csv_temp: "scripts/temp_logs.csv"
+
+monitor:
+  interval: 60  # Quét mỗi 60 giây
+  log_path: "data/access.log"
+  csv_temp: "data/temp_processed.csv"
