@@ -1,63 +1,71 @@
 import time
-import torch
+import pickle
+import pandas as pd
+
 from scripts.data_pipeline import parse_apache_log
 from utils.dataloader import LogDataLoader
 from utils.threshold_tuning import calculate_dynamic_thresholds
 from core.detect import get_uncertainty, auto_labeler, package_to_elk
 from core.train import self_learning_process
 
+
 def start_monitoring(model, optimizer, config, es=None):
     """
-    Vòng lặp giám sát liên tục. Mỗi chu kỳ:
-    1. Parse log Apache -> CSV tạm
-    2. Load dữ liệu từ CSV -> Tensor
-    3. Chạy MC Dropout để tính reconstruction_error & uncertainty
-    4. Gán nhãn tự động: Normal / Known Anomaly / Unknown Attack
-    5. Thu thập mẫu "Unknown Attack" vào buffer
-    6. Kích hoạt tự học (Self-learning) nếu buffer đủ 100 mẫu
-    7. Gửi cảnh báo lên ELK Stack (nếu có Elasticsearch client)
+    Vòng lặp giám sát liên tục để phát hiện tấn công DDoS.
+
+    Mỗi chu kỳ `interval` giây:
+    1.  Parse Apache log  → CSV tạm
+    2.  Load & tiền xử lý dữ liệu → Tensor
+    3.  MC Dropout  → reconstruction_errors, uncertainties
+    4.  Gán nhãn   → Normal / Known Anomaly / Unknown Attack
+    5.  Thu thập mẫu "Unknown Attack" vào buffer
+    6.  Kích hoạt tự học khi buffer đủ queue_limit mẫu
+    7.  Gửi cảnh báo lên ELK Stack (nếu đã cấu hình)
     """
-    # FIX: data_path được lấy từ config, không để hardcode
+    # ── Khởi tạo loader ─────────────────────────────────────────────────────
     loader = LogDataLoader(
-        data_path=config['monitor']['csv_temp'],
+        data_path=None,                              # Không load trước; sẽ load mỗi vòng
         seq_length=config['model']['seq_length']
     )
-    buffer_new_scenario = []  # Bộ nhớ đệm cho kịch bản "Unknown Attack"
 
+    buffer_new_scenario = []   # Bộ nhớ đệm cho "Unknown Attack"
+
+    # ── Vòng lặp giám sát ───────────────────────────────────────────────────
     while True:
-        print("\n--- Đang quét log mới... ---")
+        print("\n" + "="*60)
+        print(f"[MONITOR] Đang quét log mới...")
+
         try:
-            # 1. Parse Apache log -> CSV tạm
-            success = parse_apache_log(
+            # 1. Parse Apache log thô → CSV tạm
+            ok = parse_apache_log(
                 log_path=config['monitor']['log_path'],
                 output_csv=config['monitor']['csv_temp']
             )
-            if not success:
-                print(f"[WARN] Không tìm thấy file log tại: {config['monitor']['log_path']}")
+            if not ok:
+                print(f"[WARN] Bỏ qua chu kỳ — không đọc được log.")
                 time.sleep(config['monitor']['interval'])
                 continue
 
-            # 2. Load và chuyển đổi dữ liệu thành tensor
-            # FIX: reload raw_data từ CSV mới nhất trước khi gọi get_tensor_data
-            import pandas as pd
+            # 2. Load CSV + trích xuất đặc trưng + sliding window
             fresh_df = pd.read_csv(config['monitor']['csv_temp'])
-            X_new = loader.get_tensor_data(df=fresh_df)
+            X_new = loader.get_tensor_data(df=fresh_df, fit=False)
 
             if X_new is None or len(X_new) == 0:
-                print("[INFO] Không có dữ liệu mới.")
+                print("[INFO] Không có dữ liệu mới đủ để phân tích.")
                 time.sleep(config['monitor']['interval'])
                 continue
 
-            X_new_cuda = X_new.cuda()
+            device = next(model.parameters()).device
+            X_new_dev = X_new.to(device)
 
-            # 3. FIX: get_uncertainty giờ trả về (errors, uncertainties) — 2 giá trị
+            # 3. MC Dropout → reconstruction_errors + uncertainties
             reconstruction_errors, uncertainties = get_uncertainty(
                 model,
-                X_new_cuda,
+                X_new_dev,
                 num_passes=config['detection']['num_passes']
             )
 
-            # 4. FIX: auto_labeler nhận đủ cả errors lẫn uncertainties
+            # 4. Gán nhãn tự động
             labels = auto_labeler(
                 errors=reconstruction_errors,
                 uncertainties=uncertainties,
@@ -65,39 +73,55 @@ def start_monitoring(model, optimizer, config, es=None):
                 threshold_u=config['detection']['threshold_u']
             )
 
-            # Thống kê nhanh
-            unique, counts = __import__('numpy').unique(labels, return_counts=True)
-            print(f"[INFO] Kết quả: {dict(zip(unique, counts))}")
+            # Log thống kê nhanh
+            import numpy as np
+            unique, counts = np.unique(labels, return_counts=True)
+            stat = dict(zip(unique, counts))
+            print(f"[RESULT] {stat}")
+            print(f"[RESULT] RE   : mean={reconstruction_errors.mean():.5f}, "
+                  f"max={reconstruction_errors.max():.5f}")
+            print(f"[RESULT] Uncert: mean={uncertainties.mean():.6f}, "
+                  f"max={uncertainties.max():.6f}")
 
-            # 5. Thu thập mẫu Unknown Attack vào buffer
+            # 5. Gom mẫu "Unknown Attack" vào buffer để tự học
             for i, label in enumerate(labels):
                 if label == "Unknown Attack":
                     buffer_new_scenario.append(X_new[i].numpy())
 
-            # 6. FIX: self_learning_process cần save_path — lấy từ config
-            if len(buffer_new_scenario) >= 100:
-                print(f"[INFO] Buffer đủ {len(buffer_new_scenario)} mẫu -> bắt đầu tự học...")
+            print(f"[BUFFER] Unknown Attack buffer: {len(buffer_new_scenario)}"
+                  f" / {config['self_learning']['queue_limit']}")
+
+            # 6. Tự học nếu đủ mẫu
+            sl_cfg = config['self_learning']
+            if len(buffer_new_scenario) >= sl_cfg['queue_limit']:
                 success = self_learning_process(
                     model=model,
                     optimizer=optimizer,
                     new_patterns=buffer_new_scenario,
-                    save_path=config['model']['model_path']
+                    save_path=config['model']['model_path'],
+                    queue_limit=sl_cfg['queue_limit'],
+                    epochs=sl_cfg.get('epochs', 20),
+                    beta=sl_cfg.get('beta', 0.5)
                 )
                 if success:
-                    buffer_new_scenario = []  # Reset buffer sau khi học
-                    print("[INFO] Self-learning hoàn tất, buffer đã được reset.")
+                    buffer_new_scenario.clear()
+                    print("[SELF-LEARNING] Buffer đã được reset.")
 
-            # 7. Gửi dữ liệu bất thường lên ELK (es=None sẽ bỏ qua nếu chưa cấu hình)
-            package_to_elk(
-                loader=loader,
-                uncertainties=uncertainties,
-                errors=reconstruction_errors,
-                labels=labels,
-                es=es,
-                index_name=config.get('elk', {}).get('index', 'ddos-detection')
-            )
+            # 7. Gửi cảnh báo lên ELK (bỏ qua nếu chưa cấu hình)
+            elk_cfg = config.get('elk', {})
+            if elk_cfg.get('enabled', False) and es is not None:
+                package_to_elk(
+                    loader=loader,
+                    uncertainties=uncertainties,
+                    errors=reconstruction_errors,
+                    labels=labels,
+                    es=es,
+                    index_name=elk_cfg.get('index', 'ddos-detection')
+                )
 
         except Exception as ex:
+            import traceback
             print(f"[ERROR] Lỗi trong vòng lặp giám sát: {ex}")
+            traceback.print_exc()
 
         time.sleep(config['monitor']['interval'])
