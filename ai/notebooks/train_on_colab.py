@@ -1,357 +1,315 @@
-# =============================================================
-# DDoS Detection — Huấn luyện TransformerVAE trên Google Colab
-# Chạy FREE với GPU T4. Không ảnh hưởng đến máy local!
-# =============================================================
-# Hướng dẫn:
-# 1. Mở https://colab.research.google.com/
-# 2. Upload file này (File > Upload notebook)
-# 3. Vào Runtime > Change runtime type > GPU (T4)
-# 4. Chạy từng cell theo thứ tự từ trên xuống
-# =============================================================
+# ══════════════════════════════════════════════════════════════
+# TRAIN TransformerVAE — PHIÊN BẢN KAGGLE
+# Không cần Google Drive, không cần upload zip
+# CSV files đã có sẵn trong /kaggle/input/
+# ══════════════════════════════════════════════════════════════
 
-# -------------------------------------------------------
-# CELL 1: Cài đặt thư viện
-# -------------------------------------------------------
-# !pip install pandas scikit-learn matplotlib seaborn torch torchvision
-
-# -------------------------------------------------------
-# CELL 2: Kiểm tra GPU
-# -------------------------------------------------------
-import torch
-print("CUDA available:", torch.cuda.is_available())
-print("GPU:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "None — dùng CPU")
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
-
-# -------------------------------------------------------
-# CELL 3: TẠO DỮ LIỆU GIẢ LẬP (vì chưa có log thực)
-# Mô phỏng Apache access log với 2 loại: Normal & Attack
-# -------------------------------------------------------
-import pandas as pd
-import numpy as np
+import os, glob, pickle, gc
+import torch, torch.nn as nn
+import pandas as pd, numpy as np
+import matplotlib.pyplot as plt, seaborn as sns
 from sklearn.preprocessing import MinMaxScaler
-
-def generate_synthetic_logs(n_normal=2000, n_attack=300, seq_length=10):
-    """
-    Tạo dữ liệu log giả lập cho việc huấn luyện:
-    - Normal traffic: status 200, bytes ~5000, request thưa
-    - DDoS traffic: status 200/503, bytes nhỏ, request dày đặc
-    
-    Features: [status, bytes, method_cat, url_length, hour]
-    """
-    np.random.seed(42)
-    
-    # --- Traffic bình thường ---
-    normal = pd.DataFrame({
-        'status':     np.random.choice([200, 301, 404], n_normal, p=[0.85, 0.1, 0.05]),
-        'bytes':      np.random.lognormal(mean=8.5, sigma=1.2, size=n_normal).astype(int),
-        'method_cat': np.random.choice([0, 1], n_normal, p=[0.9, 0.1]),      # 0=GET, 1=POST
-        'url_length': np.random.randint(5, 60, n_normal),
-        'hour':       np.random.choice(range(8, 22), n_normal),               # giờ hành chính
-        'label':     'Normal'
-    })
-
-    # --- Traffic DDoS (HTTP Flood) ---
-    attack = pd.DataFrame({
-        'status':     np.random.choice([200, 503], n_attack, p=[0.6, 0.4]),
-        'bytes':      np.random.randint(50, 500, n_attack),                   # request nhỏ, nhiều
-        'method_cat': np.zeros(n_attack, dtype=int),                          # toàn GET
-        'url_length': np.random.randint(10, 20, n_attack),                   # URL ngắn, lặp lại
-        'hour':       np.random.choice([2, 3, 4], n_attack),                 # tấn công ban đêm
-        'label':     'Attack'
-    })
-
-    df = pd.concat([normal, attack], ignore_index=True).sample(frac=1, random_state=42)
-    print(f"Dataset: {len(df)} rows — Normal: {n_normal}, Attack: {n_attack}")
-    return df
-
-df = generate_synthetic_logs()
-df.head(10)
-
-
-# -------------------------------------------------------
-# CELL 4: TIỀN XỬ LÝ DỮ LIỆU & TẠO SLIDING WINDOWS
-# -------------------------------------------------------
-FEATURES     = ['status', 'bytes', 'method_cat', 'url_length', 'hour']
-SEQ_LENGTH   = 10
-FEATURE_SIZE = len(FEATURES)  # = 5
-
-scaler = MinMaxScaler()
-
-# Chỉ dùng dữ liệu NORMAL để train (bài toán Anomaly Detection không giám sát)
-normal_df = df[df['label'] == 'Normal'].copy()
-normal_data = scaler.fit_transform(normal_df[FEATURES].fillna(0).values)
-
-def create_windows(data, seq_length):
-    windows = []
-    for i in range(len(data) - seq_length + 1):
-        windows.append(data[i : i + seq_length])
-    return np.array(windows)
-
-X_normal = create_windows(normal_data, SEQ_LENGTH)
-print(f"Shape dữ liệu train: {X_normal.shape}")  # [N, seq_length, feature_size]
-
-# Chia train/val: 80/20
-split = int(len(X_normal) * 0.8)
-X_train = torch.tensor(X_normal[:split], dtype=torch.float32)
-X_val   = torch.tensor(X_normal[split:], dtype=torch.float32)
-print(f"Train: {X_train.shape} | Val: {X_val.shape}")
-
-
-# -------------------------------------------------------
-# CELL 5: ĐỊNH NGHĨA MÔ HÌNH TransformerVAE
-# -------------------------------------------------------
-import torch.nn as nn
-
-class TransformerVAE(nn.Module):
-    def __init__(self, feature_size, seq_length, latent_dim, nhead=2, num_layers=2, dropout=0.1):
-        super().__init__()
-        self.feature_size = feature_size
-        self.seq_length   = seq_length
-
-        # ENCODER
-        enc_layer = nn.TransformerEncoderLayer(
-            d_model=feature_size, nhead=nhead,
-            batch_first=True, dropout=dropout
-        )
-        self.transformer_encoder = nn.TransformerEncoder(enc_layer, num_layers=num_layers)
-        self.fc_mu     = nn.Linear(feature_size * seq_length, latent_dim)
-        self.fc_logvar = nn.Linear(feature_size * seq_length, latent_dim)
-
-        # DECODER
-        self.decoder_input = nn.Linear(latent_dim, feature_size * seq_length)
-        dec_layer = nn.TransformerDecoderLayer(
-            d_model=feature_size, nhead=nhead,
-            batch_first=True, dropout=dropout
-        )
-        self.transformer_decoder = nn.TransformerDecoder(dec_layer, num_layers=num_layers)
-        self.fc_final = nn.Linear(feature_size, feature_size)
-
-    def encode(self, x):
-        h      = self.transformer_encoder(x)
-        h_flat = h.view(h.size(0), -1)
-        return self.fc_mu(h_flat), self.fc_logvar(h_flat)
-
-    def reparameterize(self, mu, logvar):
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mu + eps * std
-
-    def decode(self, z):
-        z_proj = self.decoder_input(z).view(-1, self.seq_length, self.feature_size)
-        out    = self.transformer_decoder(z_proj, z_proj)
-        return self.fc_final(out)
-
-    def forward(self, x):
-        mu, logvar = self.encode(x)
-        z          = self.reparameterize(mu, logvar)
-        recon_x    = self.decode(z)
-        return recon_x, mu, logvar
-
-# Khởi tạo
-LATENT_DIM = 4
-model = TransformerVAE(
-    feature_size=FEATURE_SIZE,
-    seq_length=SEQ_LENGTH,
-    latent_dim=LATENT_DIM,
-    dropout=0.1  # dropout cần thiết cho MC Dropout sau này
-).to(DEVICE)
-
-total_params = sum(p.numel() for p in model.parameters())
-print(f"Mô hình khởi tạo thành công: {total_params:,} tham số")
-
-
-# -------------------------------------------------------
-# CELL 6: HÀM TÍNH LOSS (MSE + KLD)   [train.py]
-# -------------------------------------------------------
-def calculate_loss(recon_x, x, mu, logvar, beta=1.0):
-    recon_loss = nn.functional.mse_loss(recon_x, x, reduction='mean')
-    kld_loss   = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / x.size(0)
-    return recon_loss + beta * kld_loss, recon_loss, kld_loss
-
-
-# -------------------------------------------------------
-# CELL 7: VÒNG LẶP HUẤN LUYỆN CHÍNH
-# -------------------------------------------------------
+from sklearn.metrics import classification_report, confusion_matrix
 from torch.utils.data import DataLoader, TensorDataset
 
-EPOCHS     = 60
-BATCH_SIZE = 64
-LR         = 0.001
-BETA       = 1.0   # Trọng số KLD — tăng nếu muốn latent space gọn hơn
+# ─────────────────────────────────────────────────────────────
+# CẤU HÌNH
+# ─────────────────────────────────────────────────────────────
+WORK_DIR    = "/kaggle/working"
+CKPT_PATH   = f"{WORK_DIR}/checkpoint_beta01.pth"
+MODEL_BEST  = f"{WORK_DIR}/model_beta01_best.pth"
+SCALER_PATH = f"{WORK_DIR}/scaler_beta01.pkl"
 
-optimizer  = torch.optim.Adam(model.parameters(), lr=LR)
-scheduler  = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.5)
+SEQ          = 10
+LATENT       = 32
+NHEAD        = 2
+LAYERS       = 2
+DROPOUT      = 0.15
+BETA         = 0.1
+TOTAL_EPOCHS = 80
+BATCH        = 512
+LR           = 3e-4
 
-train_loader = DataLoader(TensorDataset(X_train), batch_size=BATCH_SIZE, shuffle=True)
+FEATS_RAW = [
+    'Flow Duration', 'Total Fwd Packets', 'Total Backward Packets',
+    'Flow Bytes/s', 'Flow Packets/s', 'Fwd IAT Mean',
+    'Packet Length Mean', 'SYN Flag Count', 'ACK Flag Count',
+    'Init_Win_bytes_forward',
+]
+LOG_FEATS = [
+    'Flow Duration', 'Total Fwd Packets', 'Total Backward Packets',
+    'Flow Bytes/s', 'Flow Packets/s', 'Fwd IAT Mean',
+    'Packet Length Mean', 'Init_Win_bytes_forward',
+]
 
-train_losses = []
-val_losses   = []
+# ─────────────────────────────────────────────────────────────
+# KIỂM TRA GPU
+# ─────────────────────────────────────────────────────────────
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"Device: {DEVICE}")
+if DEVICE == "cpu":
+    raise RuntimeError(
+        "⛔ Không có GPU! Vào Settings → Accelerator → GPU T4 ×2"
+    )
+print("✅ GPU sẵn sàng!")
 
-for epoch in range(1, EPOCHS + 1):
-    # --- Train ---
-    model.train()
-    epoch_loss = 0
-    for (batch,) in train_loader:
-        batch = batch.to(DEVICE)
-        optimizer.zero_grad()
-        recon, mu, logvar = model(batch)
-        loss, recon_l, kld_l = calculate_loss(recon, batch, mu, logvar, BETA)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # tránh gradient explosion
-        optimizer.step()
-        epoch_loss += loss.item()
+# ─────────────────────────────────────────────────────────────
+# ĐỌC DỮ LIỆU — CSV có sẵn trong /kaggle/input/
+# ─────────────────────────────────────────────────────────────
+csv_files = glob.glob("/kaggle/input/**/*.csv", recursive=True)
+print(f"Tìm thấy {len(csv_files)} file CSV")
+if len(csv_files) == 0:
+    raise FileNotFoundError(
+        "Không có CSV! Hãy click + Add Input → chọn dataset CIC-IDS2017"
+    )
 
-    avg_train = epoch_loss / len(train_loader)
-    train_losses.append(avg_train)
+chunks = []
+for f in csv_files:
+    header = pd.read_csv(f, nrows=0)
+    cols_needed = [c for c in header.columns
+                   if any(c.strip() == r.strip() for r in FEATS_RAW)
+                   or c.strip() == 'Label']
+    if len(cols_needed) < 2:
+        continue
+    tmp = pd.read_csv(f, usecols=cols_needed, low_memory=False)
+    tmp.columns = tmp.columns.str.strip()
+    chunks.append(tmp)
+    print(f"  ✓ {os.path.basename(f)}: {len(tmp):,} rows")
 
-    # --- Validation ---
-    model.eval()
-    with torch.no_grad():
-        val_batch = X_val.to(DEVICE)
-        recon_val, mu_val, logvar_val = model(val_batch)
-        val_loss, _, _ = calculate_loss(recon_val, val_batch, mu_val, logvar_val, BETA)
-    val_losses.append(val_loss.item())
+df = pd.concat(chunks, ignore_index=True)
+del chunks; gc.collect()
+df['Label'] = df['Label'].str.strip()
+FEATS = [c for c in df.columns if c != 'Label']
+FEATURE_SIZE = len(FEATS)
+print(f"\nTổng: {len(df):,} rows | Features: {FEATURE_SIZE}")
+print(df['Label'].value_counts().to_string())
 
-    scheduler.step()
+# ─────────────────────────────────────────────────────────────
+# TIỀN XỬ LÝ
+# ─────────────────────────────────────────────────────────────
+df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=FEATS)
+X_all = df[FEATS].values.astype(np.float32)
+y_all = (df['Label'] != 'BENIGN').astype(np.uint8).values
+del df; gc.collect()
 
-    if epoch % 10 == 0 or epoch == 1:
-        print(f"Epoch [{epoch:3d}/{EPOCHS}] | Train Loss: {avg_train:.5f} | Val Loss: {val_loss.item():.5f}")
+# Log1p transform
+LOG_IDX = [FEATS.index(f) for f in LOG_FEATS if f in FEATS]
+X_all[:, LOG_IDX] = np.log1p(np.abs(X_all[:, LOG_IDX]))
+print(f"Log1p transform: {len(LOG_IDX)} features.")
 
-print("\n✅ Huấn luyện hoàn tất!")
+# Tách index
+idx_b = np.where(y_all == 0)[0]
+idx_a = np.where(y_all == 1)[0]
+del y_all; gc.collect()
+np.random.seed(42); np.random.shuffle(idx_b)
+split  = int(len(idx_b) * 0.8)
+idx_tr = idx_b[:split]; idx_vl = idx_b[split:]; idx_ts = idx_a
+del idx_b, idx_a; gc.collect()
+print(f"Train:{len(idx_tr):,} | Val:{len(idx_vl):,} | Test(Attack):{len(idx_ts):,}")
 
+# Scaler
+if os.path.exists(SCALER_PATH):
+    print("✅ Load scaler đã có...")
+    with open(SCALER_PATH, 'rb') as f: sc = pickle.load(f)
+    Xtr_raw = sc.transform(X_all[idx_tr])
+else:
+    sc = MinMaxScaler()
+    Xtr_raw = sc.fit_transform(X_all[idx_tr])
+    with open(SCALER_PATH, 'wb') as f: pickle.dump(sc, f)
+    print("✅ Scaler mới đã lưu.")
 
-# -------------------------------------------------------
-# CELL 8: VẼ BIỂU ĐỒ LOSS
-# -------------------------------------------------------
-import matplotlib.pyplot as plt
+Xvl_raw = sc.transform(X_all[idx_vl])
+Xts_raw = sc.transform(X_all[idx_ts])
+del X_all, idx_tr, idx_vl, idx_ts; gc.collect()
 
-plt.figure(figsize=(10, 4))
-plt.plot(train_losses, label='Train Loss', color='steelblue')
-plt.plot(val_losses,   label='Val Loss',   color='tomato', linestyle='--')
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.title('Quá trình huấn luyện TransformerVAE')
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.show()
+# ─────────────────────────────────────────────────────────────
+# SLIDING WINDOWS
+# ─────────────────────────────────────────────────────────────
+def make_windows(data, s):
+    n, f = data.shape
+    if n < s: return np.empty((0, s, f), dtype=np.float32)
+    shape   = (n - s + 1, s, f)
+    strides = (data.strides[0], data.strides[0], data.strides[1])
+    return np.lib.stride_tricks.as_strided(
+        data, shape=shape, strides=strides).copy().astype(np.float32)
 
+print("Tạo sliding windows...")
+Wtr = make_windows(Xtr_raw, SEQ); del Xtr_raw; gc.collect(); print(f"  Train: {Wtr.shape}")
+Wvl = make_windows(Xvl_raw, SEQ); del Xvl_raw; gc.collect(); print(f"  Val  : {Wvl.shape}")
+Wts = make_windows(Xts_raw, SEQ); del Xts_raw; gc.collect(); print(f"  Test : {Wts.shape}")
+Ttr = torch.tensor(Wtr); del Wtr; gc.collect()
+Tvl = torch.tensor(Wvl); del Wvl; gc.collect()
+Tts = torch.tensor(Wts); del Wts; gc.collect()
+print("✅ Windows xong!")
 
-# -------------------------------------------------------
-# CELL 9: TÍNH NGƯỠNG ĐỘNG (threshold_tuning)
-# Chạy trên tập val để tìm ngưỡng phù hợp
-# -------------------------------------------------------
-model.eval()
-with torch.no_grad():
-    val_recon, val_mu, _ = model(X_val.to(DEVICE))
-    val_errors = nn.functional.mse_loss(
-        val_recon, X_val.to(DEVICE), reduction='none'
-    ).mean(dim=(1, 2)).cpu().numpy()
+# ─────────────────────────────────────────────────────────────
+# MODEL TransformerVAE
+# ─────────────────────────────────────────────────────────────
+class TransformerVAE(nn.Module):
+    def __init__(self, F, S, L, H, N, D):
+        super().__init__(); self.F=F; self.S=S
+        enc = nn.TransformerEncoderLayer(F, H, F*8, D, batch_first=True)
+        self.encoder  = nn.TransformerEncoder(enc, N)
+        self.fc_mu    = nn.Linear(F*S, L)
+        self.fc_logvar= nn.Linear(F*S, L)
+        self.dec_proj = nn.Linear(L, F*S)
+        dec = nn.TransformerDecoderLayer(F, H, F*8, D, batch_first=True)
+        self.decoder  = nn.TransformerDecoder(dec, N)
+        self.fc_out   = nn.Linear(F, F)
 
-# MC Dropout để tính uncertainty trên val set
-model.train()
-mc_preds = []
-with torch.no_grad():
-    for _ in range(20):
-        recon, _, _ = model(X_val.to(DEVICE))
-        mc_preds.append(recon.cpu().numpy())
+    def encode(self, x):
+        h = self.encoder(x).view(x.size(0), -1)
+        return self.fc_mu(h), self.fc_logvar(h)
 
-mc_preds      = np.array(mc_preds)   # [20, N, seq, features]
-val_uncert    = np.mean(np.var(mc_preds, axis=0), axis=(1, 2))
+    def reparameterize(self, mu, lv):
+        return mu + torch.randn_like(mu) * torch.exp(0.5 * lv)
 
-# Ngưỡng 3-sigma cho RE, percentile 95 cho Uncertainty
-threshold_re = np.mean(val_errors) + 3 * np.std(val_errors)
-threshold_u  = np.percentile(val_uncert, 95)
+    def decode(self, z):
+        p = self.dec_proj(z).view(-1, self.S, self.F)
+        return self.fc_out(self.decoder(p, p))
 
-print(f"📊 Ngưỡng phát hiện tính được:")
-print(f"   threshold_re = {threshold_re:.6f}")
-print(f"   threshold_u  = {threshold_u:.6f}")
-print(f"\n→ Cập nhật hai giá trị này vào config/config.yaml!")
-
-
-# -------------------------------------------------------
-# CELL 10: KIỂM TRA TRÊN DỮ LIỆU MỚI (cả Normal & Attack)
-# -------------------------------------------------------
-all_data   = scaler.transform(df[FEATURES].fillna(0).values)
-X_all      = create_windows(all_data, SEQ_LENGTH)
-X_all_t    = torch.tensor(X_all, dtype=torch.float32)
-
-# Tính RE
-model.eval()
-with torch.no_grad():
-    recon_all, _, _ = model(X_all_t.to(DEVICE))
-    re_all = nn.functional.mse_loss(
-        recon_all, X_all_t.to(DEVICE), reduction='none'
-    ).mean(dim=(1, 2)).cpu().numpy()
-
-# Tính Uncertainty (MC Dropout)
-model.train()
-mc_all = []
-with torch.no_grad():
-    for _ in range(20):
-        r, _, _ = model(X_all_t.to(DEVICE))
-        mc_all.append(r.cpu().numpy())
-u_all = np.mean(np.var(np.array(mc_all), axis=0), axis=(1, 2))
-
-# Gán nhãn dự đoán
-def auto_labeler(errors, uncertainties, threshold_re, threshold_u):
-    labels = []
-    for e, u in zip(errors, uncertainties):
-        if e > threshold_re:
-            labels.append("Unknown Attack" if u > threshold_u else "Known Anomaly")
-        else:
-            labels.append("Normal")
-    return np.array(labels)
-
-pred_labels = auto_labeler(re_all, u_all, threshold_re, threshold_u)
-
-# Kết quả
-from collections import Counter
-print("Nhãn dự đoán:", Counter(pred_labels))
-
-
-# -------------------------------------------------------
-# CELL 11: BIỂU ĐỒ KẾT QUẢ
-# -------------------------------------------------------
-import seaborn as sns
-
-fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-
-# Reconstruction Error
-axes[0].plot(re_all, alpha=0.5, label='RE', color='steelblue')
-axes[0].axhline(threshold_re, color='red',    linestyle='--', label=f'RE threshold ({threshold_re:.4f})')
-axes[0].set_title('Reconstruction Error')
-axes[0].set_xlabel('Sample')
-axes[0].set_ylabel('MSE')
-axes[0].legend()
-
-# Uncertainty phân theo label
-sns.boxplot(x=pred_labels, y=u_all, ax=axes[1], palette='Set2')
-axes[1].axhline(threshold_u, color='red', linestyle='--', label=f'U threshold ({threshold_u:.4f})')
-axes[1].set_title('Uncertainty theo nhãn dự đoán')
-axes[1].set_xlabel('Nhãn')
-axes[1].set_ylabel('Uncertainty Score')
-axes[1].legend()
-
-plt.tight_layout()
-plt.show()
+    def forward(self, x):
+        mu, lv = self.encode(x)
+        return self.decode(self.reparameterize(mu, lv)), mu, lv
 
 
-# -------------------------------------------------------
-# CELL 12: LƯU MÔ HÌNH & TẢI VỀ MÁY CỦA BẠN
-# -------------------------------------------------------
-import os
+def vae_loss(recon, x, mu, lv, beta=1.0):
+    mse = nn.functional.mse_loss(recon, x, reduction='mean')
+    kld = -0.5 * torch.sum(1 + lv - mu.pow(2) - lv.exp()) / x.size(0)
+    return mse + beta * kld, mse, kld
 
-os.makedirs("models", exist_ok=True)
-SAVE_PATH = "models/transformer_vae_v1.pth"
 
-torch.save(model.state_dict(), SAVE_PATH)
-print(f"✅ Đã lưu mô hình tại: {SAVE_PATH}")
+model = TransformerVAE(FEATURE_SIZE, SEQ, LATENT, NHEAD, LAYERS, DROPOUT).to(DEVICE)
+opt   = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=1e-5)
+sch   = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=TOTAL_EPOCHS, eta_min=1e-5)
+print(f"Model: {sum(p.numel() for p in model.parameters()):,} params | β={BETA}")
 
-# Tải file về máy (chỉ chạy được trong Google Colab)
-from google.colab import files
-files.download(SAVE_PATH)
-print("📥 Đang tải file về máy...")
-print("\n→ Sau khi tải về, đặt file vào thư mục:")
-print("   DDoS-Mitigation/ai/models/transformer_vae_v1.pth")
+# ─────────────────────────────────────────────────────────────
+# LOAD CHECKPOINT NẾU CÓ
+# ─────────────────────────────────────────────────────────────
+start_epoch = 1
+best        = float('inf')
+hist        = {'tr': [], 'vl': [], 'mse': [], 'kld': []}
+
+if os.path.exists(CKPT_PATH):
+    print(f"\n>>> Tìm thấy checkpoint! Đang resume...")
+    ckpt = torch.load(CKPT_PATH, map_location=DEVICE)
+    model.load_state_dict(ckpt['model'])
+    opt.load_state_dict(ckpt['optimizer'])
+    sch.load_state_dict(ckpt['scheduler'])
+    start_epoch = ckpt['epoch'] + 1
+    best        = ckpt['best_val']
+    hist        = ckpt.get('history', hist)
+    print(f">>> Resume từ epoch {start_epoch}/{TOTAL_EPOCHS}")
+else:
+    print(f"\n>>> Train từ đầu (β={BETA}, epoch 1/{TOTAL_EPOCHS})")
+
+# ─────────────────────────────────────────────────────────────
+# TRAIN
+# ─────────────────────────────────────────────────────────────
+if start_epoch <= TOTAL_EPOCHS:
+    ldr = DataLoader(TensorDataset(Ttr), batch_size=BATCH, shuffle=True,
+                     drop_last=True, pin_memory=True, num_workers=4)
+    print(f"Training | {len(ldr)} batches/epoch\n")
+
+    for ep in range(start_epoch, TOTAL_EPOCHS + 1):
+        model.train(); tl = tm = tk = 0.0
+        for (b,) in ldr:
+            b = b.to(DEVICE, non_blocking=True); opt.zero_grad()
+            r, mu, lv = model(b)
+            loss, mse, kld = vae_loss(r, b, mu, lv, BETA)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            opt.step()
+            tl += loss.item(); tm += mse.item(); tk += kld.item()
+
+        nb = len(ldr)
+        atr = tl/nb
+        hist['tr'].append(atr); hist['mse'].append(tm/nb); hist['kld'].append(tk/nb)
+
+        model.eval()
+        with torch.no_grad():
+            vb = Tvl.to(DEVICE); rv, mv, lv2 = model(vb)
+            avl = vae_loss(rv, vb, mv, lv2, BETA)[0].item()
+        hist['vl'].append(avl); sch.step()
+
+        if avl < best:
+            best = avl
+            torch.save(model.state_dict(), MODEL_BEST)
+
+        torch.save({
+            'epoch': ep, 'model': model.state_dict(),
+            'optimizer': opt.state_dict(), 'scheduler': sch.state_dict(),
+            'best_val': best, 'history': hist,
+        }, CKPT_PATH)
+
+        lr_now = opt.param_groups[0]['lr']
+        print(f"[{ep:3d}/{TOTAL_EPOCHS}] "
+              f"train={atr:.5f} "
+              f"(MSE={hist['mse'][-1]:.5f} KLD={hist['kld'][-1]:.5f}) "
+              f"val={avl:.5f} best={best:.5f} lr={lr_now:.1e}")
+
+    print(f"\n✅ Train xong!")
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 4))
+    axes[0].plot(hist['tr'], label='Train'); axes[0].plot(hist['vl'], label='Val', ls='--')
+    axes[0].set_title('Total Loss'); axes[0].legend(); axes[0].grid(alpha=0.3)
+    axes[1].plot(hist['mse'], label='MSE'); axes[1].plot(hist['kld'], label='KLD', ls='--')
+    axes[1].set_title(f'MSE vs KLD (β={BETA})'); axes[1].legend(); axes[1].grid(alpha=0.3)
+    plt.tight_layout(); plt.show()
+
+# ─────────────────────────────────────────────────────────────
+# THRESHOLD + ĐÁNH GIÁ
+# ─────────────────────────────────────────────────────────────
+model.load_state_dict(torch.load(MODEL_BEST, map_location=DEVICE))
+
+def mc_eval(model, tensor, passes=15, bs=2048):
+    model.train(); all_RE=[]; all_U=[]
+    for i in range(0, len(tensor), bs):
+        batch = tensor[i:i+bs].to(DEVICE); preds=[]
+        with torch.no_grad():
+            for _ in range(passes):
+                r, _, _ = model(batch); preds.append(r.cpu().numpy())
+        P = np.array(preds); D = batch.cpu().numpy()
+        all_RE.append(np.mean((P.mean(0)-D)**2, axis=(1,2)))
+        all_U.append(np.mean(np.var(P, axis=0),  axis=(1,2)))
+        if i % (bs*20) == 0: print(f"  {i}/{len(tensor)}...")
+    return np.concatenate(all_RE), np.concatenate(all_U)
+
+print("Tính threshold..."); RE_v, U_v = mc_eval(model, Tvl)
+THR_RE = float(np.percentile(RE_v, 90))
+THR_U  = float(np.percentile(U_v, 95))
+print(f"\n★ threshold_re = {THR_RE:.6f}")
+print(f"★ threshold_u  = {THR_U:.10f}")
+
+print("Đánh giá Attack..."); RE_t, U_t = mc_eval(model, Tts)
+RE_all = np.concatenate([RE_v, RE_t])
+y_true = np.array([0]*len(RE_v)+[1]*len(RE_t))
+y_pred = (RE_all > THR_RE).astype(int)
+print(f"\n{'='*65}")
+print(classification_report(y_true, y_pred,
+      target_names=['BENIGN','Attack'], digits=4))
+
+fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+sns.heatmap(confusion_matrix(y_true, y_pred), annot=True, fmt='d', cmap='Blues',
+            ax=axes[0], xticklabels=['Normal','Attack'],
+            yticklabels=['BENIGN','Attack'])
+axes[0].set_title(f'Confusion Matrix (β={BETA})')
+axes[1].hist(RE_v[::5], bins=120, alpha=0.6, label='BENIGN', density=True)
+axes[1].hist(RE_t[::5], bins=120, alpha=0.6, label='Attack', color='tomato', density=True)
+axes[1].axvline(THR_RE, color='red', ls='--', label=f'thr={THR_RE:.4f}')
+axes[1].legend(); axes[1].set_title('RE: BENIGN vs Attack')
+plt.tight_layout(); plt.show()
+
+print(f"""
+╔══════════════════════════════════════════════════════╗
+║  Model đã lưu tại /kaggle/working/                  ║
+║  Vào Output panel bên phải để tải về                ║
+╠══════════════════════════════════════════════════════╣
+║  Cập nhật config.yaml:                              ║
+║    feature_size: {FEATURE_SIZE}                              ║
+║    latent_dim:   {LATENT}                              ║
+║    threshold_re: {THR_RE:.6f}                   ║
+║    threshold_u:  {THR_U:.8f}               ║
+╚══════════════════════════════════════════════════════╝
+""")
