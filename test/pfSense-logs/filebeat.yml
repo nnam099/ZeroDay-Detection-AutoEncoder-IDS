@@ -1,0 +1,10 @@
+filebeat.inputs:
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/filter.log   # log firewall pfSense
+    fields:
+      source: pfSense
+
+output.logstash:
+  hosts: ["logstash:5044"]
