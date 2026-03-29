@@ -16,9 +16,9 @@ from torch.utils.data import DataLoader, TensorDataset
 # CẤU HÌNH
 # ─────────────────────────────────────────────────────────────
 WORK_DIR    = "/kaggle/working"
-CKPT_PATH   = f"{WORK_DIR}/checkpoint_beta01.pth"
-MODEL_BEST  = f"{WORK_DIR}/model_beta01_best.pth"
-SCALER_PATH = f"{WORK_DIR}/scaler_beta01.pkl"
+CKPT_PATH   = f"{WORK_DIR}/checkpoint_conv_beta01.pth"
+MODEL_BEST  = f"{WORK_DIR}/model_conv_beta01_best.pth"
+SCALER_PATH = f"{WORK_DIR}/scaler_conv_beta01.pkl"
 
 SEQ          = 10
 LATENT       = 32
@@ -89,6 +89,13 @@ print(df['Label'].value_counts().to_string())
 # ─────────────────────────────────────────────────────────────
 df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=FEATS)
 X_all = df[FEATS].values.astype(np.float32)
+
+# Lọc bỏ triệt để các giá trị inf/nan (như string 'Infinity' còn sót)
+finite_mask = np.isfinite(X_all).all(axis=1)
+if not finite_mask.all():
+    X_all = X_all[finite_mask]
+    df = df.iloc[finite_mask]
+
 y_all = (df['Label'] != 'BENIGN').astype(np.uint8).values
 del df; gc.collect()
 
@@ -143,22 +150,57 @@ Tts = torch.tensor(Wts); del Wts; gc.collect()
 print("✅ Windows xong!")
 
 # ─────────────────────────────────────────────────────────────
-# MODEL TransformerVAE
+# MODEL TransformerVAE (CẢI TIẾN CHUYÊN GIA)
 # ─────────────────────────────────────────────────────────────
+import math
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        if d_model % 2 != 0:
+            pe[:, 1::2] = torch.cos(position * div_term)[:, :-1]
+        else:
+            pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:x.size(1), :]
+        return x
+
 class TransformerVAE(nn.Module):
     def __init__(self, F, S, L, H, N, D):
         super().__init__(); self.F=F; self.S=S
-        enc = nn.TransformerEncoderLayer(F, H, F*8, D, batch_first=True)
+        
+        # Tích hợp Positional Encoding và CNN1D Extraction
+        self.pos_encoder = PositionalEncoding(F, max_len=S)
+        self.local_cnn = nn.Conv1d(in_channels=F, out_channels=F, kernel_size=3, padding=1)
+        self.act_cnn = nn.GELU()
+        
+        enc = nn.TransformerEncoderLayer(F, H, F*8, D, batch_first=True, activation='gelu')
         self.encoder  = nn.TransformerEncoder(enc, N)
+        
+        self.dropout_z = nn.Dropout(D)
         self.fc_mu    = nn.Linear(F*S, L)
         self.fc_logvar= nn.Linear(F*S, L)
         self.dec_proj = nn.Linear(L, F*S)
-        dec = nn.TransformerDecoderLayer(F, H, F*8, D, batch_first=True)
+        
+        dec = nn.TransformerDecoderLayer(F, H, F*8, D, batch_first=True, activation='gelu')
         self.decoder  = nn.TransformerDecoder(dec, N)
         self.fc_out   = nn.Linear(F, F)
 
     def encode(self, x):
-        h = self.encoder(x).view(x.size(0), -1)
+        x_cnn = x.transpose(1, 2)
+        x_cnn = self.act_cnn(self.local_cnn(x_cnn))
+        x_cnn = x_cnn.transpose(1, 2)
+        
+        x_emb = self.pos_encoder(x + x_cnn)
+        
+        h = self.encoder(x_emb).contiguous().view(x.size(0), -1)
+        h = self.dropout_z(h)
         return self.fc_mu(h), self.fc_logvar(h)
 
     def reparameterize(self, mu, lv):
@@ -166,6 +208,7 @@ class TransformerVAE(nn.Module):
 
     def decode(self, z):
         p = self.dec_proj(z).view(-1, self.S, self.F)
+        p = self.pos_encoder(p)
         return self.fc_out(self.decoder(p, p))
 
     def forward(self, x):

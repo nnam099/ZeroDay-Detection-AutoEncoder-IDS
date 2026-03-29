@@ -26,10 +26,10 @@ os.makedirs(DRIVE_DIR, exist_ok=True)
 
 # Đường dẫn — TẤT CẢ lưu trên Drive (không bao giờ mất)
 DRIVE_ZIP   = f"{DRIVE_DIR}/CIC-IDS2017.zip"
-CKPT_PATH   = f"{DRIVE_DIR}/checkpoint_beta01.pth"   # Checkpoint riêng cho β=0.1
-MODEL_BEST  = f"{DRIVE_DIR}/model_beta01_best.pth"   # Model β=0.1 tốt nhất
-MODEL_OLD   = f"{DRIVE_DIR}/model_best.pth"           # Model cũ β=0.01 (giữ nguyên!)
-SCALER_PATH = f"{DRIVE_DIR}/scaler_beta01.pkl"        # Scaler dùng cho β=0.1
+CKPT_PATH   = f"{DRIVE_DIR}/checkpoint_conv_beta01.pth"   # Đổi tên file để train model phiên bản Mới (Conv)
+MODEL_BEST  = f"{DRIVE_DIR}/model_conv_beta01_best.pth"   # Model kiến trúc có Conv1D + Positional
+MODEL_OLD   = f"{DRIVE_DIR}/model_beta01_best.pth"        # Model cũ
+SCALER_PATH = f"{DRIVE_DIR}/scaler_conv_beta01.pkl"       # Scaler kiến trúc mới
 LOCAL_ZIP   = "/content/CIC-IDS2017.zip"
 LOCAL_DIR   = "/content/CIC-IDS2017"
 
@@ -166,6 +166,13 @@ print(df['Label'].value_counts().to_string())
 # ─────────────────────────────────────────────────────────────
 df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=FEATS)
 X_all = df[FEATS].values.astype(np.float32)
+
+# Lọc bỏ giá trị inf/nan lọt qua bước trên (như string 'Infinity')
+finite_mask = np.isfinite(X_all).all(axis=1)
+if not finite_mask.all():
+    X_all = X_all[finite_mask]
+    df = df.iloc[finite_mask]
+
 y_all = (df['Label'] != 'BENIGN').astype(np.uint8).values
 del df; gc.collect()
 
@@ -224,22 +231,62 @@ print("✅ Windows xong!")
 
 
 # ─────────────────────────────────────────────────────────────
-# BƯỚC 6: MÔ HÌNH TransformerVAE
+# BƯỚC 6: MÔ HÌNH TransformerVAE (CẢI TIẾN CHUYÊN SÂU BỞI CHUYÊN GIA)
 # ─────────────────────────────────────────────────────────────
+import math
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        if d_model % 2 != 0:
+            pe[:, 1::2] = torch.cos(position * div_term)[:, :-1]
+        else:
+            pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:x.size(1), :]
+        return x
+
 class TransformerVAE(nn.Module):
     def __init__(self, F, S, L, H, N, D):
         super().__init__(); self.F=F; self.S=S
-        enc = nn.TransformerEncoderLayer(F, H, F*8, D, batch_first=True)
+        
+        # CHUYÊN GIA FIX 1: Thêm Embed Vị trí. DDoS phụ thuộc vào tần suất và thứ tự time
+        self.pos_encoder = PositionalEncoding(F, max_len=S)
+        
+        # CHUYÊN GIA FIX 2: Thêm Conv1D để nhận diện cực nhỏ các luồng "Burst" gói tin
+        self.local_cnn = nn.Conv1d(in_channels=F, out_channels=F, kernel_size=3, padding=1)
+        self.act_cnn = nn.GELU()
+        
+        enc = nn.TransformerEncoderLayer(F, H, F*8, D, batch_first=True, activation='gelu')
         self.encoder  = nn.TransformerEncoder(enc, N)
+        
+        self.dropout_z = nn.Dropout(D)
         self.fc_mu    = nn.Linear(F*S, L)
         self.fc_logvar= nn.Linear(F*S, L)
         self.dec_proj = nn.Linear(L, F*S)
-        dec = nn.TransformerDecoderLayer(F, H, F*8, D, batch_first=True)
+        
+        dec = nn.TransformerDecoderLayer(F, H, F*8, D, batch_first=True, activation='gelu')
         self.decoder  = nn.TransformerDecoder(dec, N)
         self.fc_out   = nn.Linear(F, F)
 
     def encode(self, x):
-        h = self.encoder(x).view(x.size(0), -1)
+        # Local Burst Extraction
+        x_cnn = x.transpose(1, 2)
+        x_cnn = self.act_cnn(self.local_cnn(x_cnn))
+        x_cnn = x_cnn.transpose(1, 2)
+        
+        # Vị trí chuỗi
+        x_emb = self.pos_encoder(x + x_cnn)
+        
+        # Phân tích Transformer
+        h = self.encoder(x_emb).contiguous().view(x.size(0), -1)
+        h = self.dropout_z(h)
         return self.fc_mu(h), self.fc_logvar(h)
 
     def reparameterize(self, mu, lv):
@@ -247,6 +294,7 @@ class TransformerVAE(nn.Module):
 
     def decode(self, z):
         p = self.dec_proj(z).view(-1, self.S, self.F)
+        p = self.pos_encoder(p)
         return self.fc_out(self.decoder(p, p))
 
     def forward(self, x):
@@ -451,6 +499,8 @@ for f in csv_files2:
     tmp.columns = tmp.columns.str.strip()
     dfs2.append(tmp)
 df2 = pd.concat(dfs2, ignore_index=True); del dfs2; gc.collect()
+# Bổ sung dòng này để dọn dẹp giá trị inf và NaN từ các feature (như Flow Bytes/s có thể có inf do chia cho 0)
+df2 = df2.replace([np.inf, -np.inf], np.nan).dropna(subset=[f for f in FEATS if f in df2.columns])
 df2['Label'] = df2['Label'].str.strip()
 df_atk = df2[df2['Label'] != 'BENIGN'].copy(); del df2; gc.collect()
 
@@ -458,6 +508,12 @@ for attack_type in sorted(df_atk['Label'].unique()):
     sub = df_atk[df_atk['Label'] == attack_type]
     if len(sub) < SEQ + 5: continue
     Xsub = sub[[f for f in FEATS if f in sub.columns]].values.astype(np.float32)
+    
+    # Lọc bỏ các dòng bị lỗi 'Infinity' hoặc NaN sau khi ép kiểu
+    mask = np.isfinite(Xsub).all(axis=1)
+    Xsub = Xsub[mask]
+    if len(Xsub) < SEQ + 5: continue
+    
     Xsub[:, LOG_IDX] = np.log1p(np.abs(Xsub[:, LOG_IDX]))
     Xsub_sc = sc.transform(Xsub)
     Wsub = make_windows(Xsub_sc, SEQ)
