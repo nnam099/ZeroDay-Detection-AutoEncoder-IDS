@@ -26,10 +26,10 @@ os.makedirs(DRIVE_DIR, exist_ok=True)
 
 # Đường dẫn — TẤT CẢ lưu trên Drive (không bao giờ mất)
 DRIVE_ZIP   = f"{DRIVE_DIR}/CIC-IDS2017.zip"
-CKPT_PATH   = f"{DRIVE_DIR}/checkpoint_conv_beta01.pth"   # Đổi tên file để train model phiên bản Mới (Conv)
-MODEL_BEST  = f"{DRIVE_DIR}/model_conv_beta01_best.pth"   # Model kiến trúc có Conv1D + Positional
-MODEL_OLD   = f"{DRIVE_DIR}/model_beta01_best.pth"        # Model cũ
-SCALER_PATH = f"{DRIVE_DIR}/scaler_conv_beta01.pkl"       # Scaler kiến trúc mới
+CKPT_PATH   = f"{DRIVE_DIR}/checkpoint_proto_beta01_14feats.pth"   # Đổi tên file để train model phiên bản Mới (Proto + 14 features)
+MODEL_BEST  = f"{DRIVE_DIR}/model_proto_beta01_14feats_best.pth"   # Model kiến trúc có Proto + Conv1D + Positional + 14 feats
+MODEL_OLD   = f"{DRIVE_DIR}/model_conv_beta01_14feats_best.pth"           # Model cũ
+SCALER_PATH = f"{DRIVE_DIR}/scaler_proto_beta01_14feats.pkl"       # Scaler kiến trúc mới
 LOCAL_ZIP   = "/content/CIC-IDS2017.zip"
 LOCAL_DIR   = "/content/CIC-IDS2017"
 
@@ -101,8 +101,9 @@ TOTAL_EPOCHS = 80
 BATCH        = 512
 LR           = 3e-4
 
-# ── 10 features từ CIC-IDS2017 ───────────────────────────────
+# ── 14 features từ CIC-IDS2017 ───────────────────────────────
 FEATS_RAW = [
+    'Destination Port',         # Bắt PortScan (thay đổi port liên tục)
     'Flow Duration',            # DDoS flows rất ngắn
     'Total Fwd Packets',        # DDoS gửi cực nhiều packet
     'Total Backward Packets',   # Server quá tải → ít packet về
@@ -113,13 +114,17 @@ FEATS_RAW = [
     'SYN Flag Count',           # SYN Flood: hàng nghìn SYN
     'ACK Flag Count',           # ACK bất thường
     'Init_Win_bytes_forward',   # Window size — DDoS bot thường = 0
+    'Active Mean',              # Thời gian ngâm kết nối (Botnet)
+    'Idle Mean',                # Thời gian rảnh chờ lệnh (Botnet)
+    'Bwd Packet Length Std',    # Độ lệch chuẩn Payload (C&C Botnet)
 ]
 
 # Features có phân phối skewed → cần log1p để normalize tốt
 LOG_FEATS = [
-    'Flow Duration', 'Total Fwd Packets', 'Total Backward Packets',
+    'Destination Port', 'Flow Duration', 'Total Fwd Packets', 'Total Backward Packets',
     'Flow Bytes/s',  'Flow Packets/s',    'Fwd IAT Mean',
     'Packet Length Mean', 'Init_Win_bytes_forward',
+    'Active Mean', 'Idle Mean', 'Bwd Packet Length Std'
 ]
 
 
@@ -231,35 +236,58 @@ print("✅ Windows xong!")
 
 
 # ─────────────────────────────────────────────────────────────
-# BƯỚC 6: MÔ HÌNH TransformerVAE (CẢI TIẾN CHUYÊN SÂU BỞI CHUYÊN GIA)
+# BƯỚC 6: MÔ HÌNH Prototypical ConvTransformerVAE
 # ─────────────────────────────────────────────────────────────
 import math
+import torch.nn.functional as F
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=5000):
         super(PositionalEncoding, self).__init__()
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
+        div = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div)
         if d_model % 2 != 0:
-            pe[:, 1::2] = torch.cos(position * div_term)[:, :-1]
+            pe[:, 1::2] = torch.cos(position * div)[:, :-1]
         else:
-            pe[:, 1::2] = torch.cos(position * div_term)
+            pe[:, 1::2] = torch.cos(position * div)
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        x = x + self.pe[:x.size(1), :]
-        return x
+        return x + self.pe[:x.size(1), :]
+
+class MemoryBank(nn.Module):
+    """
+    PROTOTYPICAL MEMORY BANK: Bộ nhớ lưu trữ "Dấu vân tay" của dữ liệu Benign sạch.
+    Khi Hacker tấn công, data lạ sẽ bị ép phải map với các cấu trúc chuẩn mực này.
+    Do không khớp, sai số Reconstruction Error (RE) của Attack sẽ bị khuyếch đại văng xa, 
+    giúp Recall rate tăng đột phá.
+    """
+    def __init__(self, num_prototypes, latent_dim, shrink_thres=0.0025):
+        super().__init__()
+        self.prototypes = nn.Parameter(torch.randn(num_prototypes, latent_dim))
+        nn.init.xavier_uniform_(self.prototypes)
+        self.shrink_thres = shrink_thres
+
+    def forward(self, z):
+        # Tính độ tương đồng giữa latent z và các Prototypes
+        att = F.linear(z, self.prototypes)
+        att = F.softmax(att, dim=-1)
+        
+        if self.shrink_thres > 0:
+            att = F.relu(att - self.shrink_thres)
+            att = F.normalize(att, p=1, dim=-1)
+            
+        # Tổ hợp lại latent z từ các nguyên mẫu chuẩn
+        z_mem = F.linear(att, self.prototypes.t())
+        return z_mem, att
 
 class TransformerVAE(nn.Module):
-    def __init__(self, F, S, L, H, N, D):
+    def __init__(self, F, S, L, H, N, D, num_prototypes=100):
         super().__init__(); self.F=F; self.S=S
         
-        # CHUYÊN GIA FIX 1: Thêm Embed Vị trí. DDoS phụ thuộc vào tần suất và thứ tự time
         self.pos_encoder = PositionalEncoding(F, max_len=S)
-        
-        # CHUYÊN GIA FIX 2: Thêm Conv1D để nhận diện cực nhỏ các luồng "Burst" gói tin
         self.local_cnn = nn.Conv1d(in_channels=F, out_channels=F, kernel_size=3, padding=1)
         self.act_cnn = nn.GELU()
         
@@ -269,22 +297,21 @@ class TransformerVAE(nn.Module):
         self.dropout_z = nn.Dropout(D)
         self.fc_mu    = nn.Linear(F*S, L)
         self.fc_logvar= nn.Linear(F*S, L)
-        self.dec_proj = nn.Linear(L, F*S)
         
+        # LÕI CẬP NHẬT: Tích hợp Prototypical Memory Bank
+        self.memory_bank = MemoryBank(num_prototypes, L)
+        
+        self.dec_proj = nn.Linear(L, F*S)
         dec = nn.TransformerDecoderLayer(F, H, F*8, D, batch_first=True, activation='gelu')
         self.decoder  = nn.TransformerDecoder(dec, N)
         self.fc_out   = nn.Linear(F, F)
 
     def encode(self, x):
-        # Local Burst Extraction
         x_cnn = x.transpose(1, 2)
         x_cnn = self.act_cnn(self.local_cnn(x_cnn))
         x_cnn = x_cnn.transpose(1, 2)
-        
-        # Vị trí chuỗi
         x_emb = self.pos_encoder(x + x_cnn)
         
-        # Phân tích Transformer
         h = self.encoder(x_emb).contiguous().view(x.size(0), -1)
         h = self.dropout_z(h)
         return self.fc_mu(h), self.fc_logvar(h)
@@ -299,24 +326,31 @@ class TransformerVAE(nn.Module):
 
     def forward(self, x):
         mu, lv = self.encode(x)
-        return self.decode(self.reparameterize(mu, lv)), mu, lv
+        z = self.reparameterize(mu, lv)
+        
+        # Đưa luồng z qua bộ lọc tiêu chuẩn Memory Bank
+        z_mem, att = self.memory_bank(z)
+        
+        # Tái tạo lại chuỗi với z siêu sạch
+        recon_x = self.decode(z_mem)
+        return recon_x, mu, lv, att
 
 
-def vae_loss(recon, x, mu, lv, beta=1.0):
-    """
-    Loss = MSE + β × KLD
-    β=0.1: KLD đủ lớn để encoder học (KLD > 0),
-           MSE vẫn chiếm ưu thế để phân biệt BENIGN/Attack
-    """
+def ae_loss(recon, x, att=None):
     mse = nn.functional.mse_loss(recon, x, reduction='mean')
-    kld = -0.5 * torch.sum(1 + lv - mu.pow(2) - lv.exp()) / x.size(0)
-    return mse + beta * kld, mse, kld
+    
+    # Entropy penalty: Bắt buộc mô hình Memory Bank phải chọn cụm Prototype dứt khoát 
+    entropy_loss = 0
+    if att is not None:
+        entropy_loss = torch.sum(-att * torch.log(att + 1e-12)) / x.size(0)
+        
+    return mse + 0.001 * entropy_loss, mse
 
 
-model = TransformerVAE(FEATURE_SIZE, SEQ, LATENT, NHEAD, LAYERS, DROPOUT).to(DEVICE)
+model = MemConvTransformerAE(FEATURE_SIZE, SEQ, LATENT, NHEAD, LAYERS, DROPOUT).to(DEVICE)
 opt   = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=1e-5)
 sch   = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=TOTAL_EPOCHS, eta_min=1e-5)
-print(f"Model: {sum(p.numel() for p in model.parameters()):,} params | β={BETA}")
+print(f"Model: {sum(p.numel() for p in model.parameters()):,} params | Mem-AE")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -324,22 +358,22 @@ print(f"Model: {sum(p.numel() for p in model.parameters()):,} params | β={BETA}
 # ─────────────────────────────────────────────────────────────
 start_epoch = 1
 best        = float('inf')
-hist        = {'tr': [], 'vl': [], 'mse': [], 'kld': []}
+hist        = {'tr': [], 'vl': [], 'mse': []}
 
 if os.path.exists(CKPT_PATH):
     print(f"\n{'='*55}")
-    print(f">>> Tìm thấy checkpoint β=0.1! Đang resume...")
+    print(f">>> Tìm thấy checkpoint Mem-AE! Đang resume...")
     ckpt = torch.load(CKPT_PATH, map_location=DEVICE)
     model.load_state_dict(ckpt['model'])
     opt.load_state_dict(ckpt['optimizer'])
     sch.load_state_dict(ckpt['scheduler'])
     start_epoch = ckpt['epoch'] + 1
-    best        = ckpt['best_val']
+    best        = ckpt.get('best_val', float('inf'))
     hist        = ckpt.get('history', hist)
     print(f">>> Resume từ epoch {start_epoch}/{TOTAL_EPOCHS} | best={best:.6f}")
     print(f"{'='*55}\n")
 else:
-    print(f"\n>>> Bắt đầu train mới (β={BETA}, epoch 1/{TOTAL_EPOCHS})")
+    print(f"\n>>> Bắt đầu train mới (Mem-AE, epoch 1/{TOTAL_EPOCHS})")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -351,24 +385,24 @@ if start_epoch <= TOTAL_EPOCHS:
     print(f"Training | {len(ldr)} batches/epoch\n")
 
     for ep in range(start_epoch, TOTAL_EPOCHS + 1):
-        model.train(); tl = tm = tk = 0.0
+        model.train(); tl = tm = 0.0
         for (b,) in ldr:
             b = b.to(DEVICE, non_blocking=True); opt.zero_grad()
-            r, mu, lv = model(b)
-            loss, mse, kld = vae_loss(r, b, mu, lv, BETA)
+            r, att = model(b)
+            loss, mse = ae_loss(r, b, att)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
-            tl += loss.item(); tm += mse.item(); tk += kld.item()
+            tl += loss.item(); tm += mse.item()
 
         nb  = len(ldr)
         atr = tl/nb; hist['tr'].append(atr)
-        hist['mse'].append(tm/nb); hist['kld'].append(tk/nb)
+        hist['mse'].append(tm/nb)
 
         model.eval()
         with torch.no_grad():
-            vb = Tvl.to(DEVICE); rv, mv, lv2 = model(vb)
-            avl = vae_loss(rv, vb, mv, lv2, BETA)[0].item()
+            vb = Tvl.to(DEVICE); rv, att_v = model(vb)
+            avl = ae_loss(rv, vb, att_v)[0].item()
         hist['vl'].append(avl); sch.step()
 
         if avl < best:
@@ -385,80 +419,70 @@ if start_epoch <= TOTAL_EPOCHS:
         lr_now = opt.param_groups[0]['lr']
         print(f"[{ep:3d}/{TOTAL_EPOCHS}] "
               f"train={atr:.5f} "
-              f"(MSE={hist['mse'][-1]:.5f}  KLD={hist['kld'][-1]:.5f}) "
+              f"(MSE={hist['mse'][-1]:.5f}) "
               f"val={avl:.5f}  best={best:.5f}  lr={lr_now:.1e}")
 
     print(f"\n✅ Train xong! Model lưu: {MODEL_BEST}")
 
     # Learning Curve
-    fig, axes = plt.subplots(1, 2, figsize=(14, 4))
-    axes[0].plot(hist['tr'], label='Train', color='steelblue')
-    axes[0].plot(hist['vl'], label='Val',   color='tomato', linestyle='--')
-    axes[0].set_title('Total Loss'); axes[0].legend(); axes[0].grid(alpha=0.3)
-
-    axes[1].plot(hist['mse'], label='MSE (Recon)', color='green')
-    axes[1].plot(hist['kld'], label='KLD',         color='orange', linestyle='--')
-    axes[1].set_title(f'MSE vs KLD (β={BETA})')
-    axes[1].legend(); axes[1].grid(alpha=0.3)
-    plt.suptitle(f'Learning Curve — β={BETA}, latent={LATENT}, log-transform')
+    fig, axes = plt.subplots(1, 1, figsize=(8, 5))
+    axes.plot(hist['tr'], label='Train Total Loss', color='steelblue')
+    axes.plot(hist['vl'], label='Val Total Loss',   color='tomato', linestyle='--')
+    axes.plot(hist['mse'], label='Train MSE', color='green')
+    axes.set_title('Learning Curve (Mem-AE)'); axes.legend(); axes.grid(alpha=0.3)
     plt.tight_layout(); plt.show()
 else:
     print("Train đã xong! Tiếp tục đến phần Evaluation.")
 
 
 # ─────────────────────────────────────────────────────────────
-# BƯỚC 9: TÍNH NGƯỠNG (MC Dropout)
+# BƯỚC 9: TÍNH NGƯỠNG ANOMALY THEO CHUẨN THỰC CHIẾN
 # ─────────────────────────────────────────────────────────────
 model.load_state_dict(torch.load(MODEL_BEST, map_location=DEVICE))
 
 
-def mc_eval(model, tensor, passes=15, bs=2048):
+def fast_eval(model, tensor, bs=4096):
     """
-    MC Dropout: Chạy 15 lần với dropout BẬT (model.train())
-    → RE  = sai số tái tạo trung bình  (cao = bất thường)
-    → U   = phương sai giữa các lần    (cao = chưa học bao giờ)
+    Fast Deterministic Evaluation:
+    Đánh giá tốc độ O(1) - chạy 1 vòng trên mô hình Tất định không Dropout.
+    Thiết kế siêu tối ưu cho Real-time IDS.
     """
-    model.train()
-    all_RE, all_U = [], []
-    for i in range(0, len(tensor), bs):
-        batch = tensor[i:i+bs].to(DEVICE); preds = []
-        with torch.no_grad():
-            for _ in range(passes):
-                r, _, _ = model(batch)
-                preds.append(r.cpu().numpy())
-        P = np.array(preds); D = batch.cpu().numpy()
-        all_RE.append(np.mean((P.mean(0) - D) ** 2, axis=(1, 2)))
-        all_U.append(np.mean(np.var(P, axis=0),      axis=(1, 2)))
-        if i % (bs * 20) == 0: print(f"  {i}/{len(tensor)}...")
-    return np.concatenate(all_RE), np.concatenate(all_U)
+    model.eval()
+    all_RE = []
+    with torch.no_grad():
+        for i in range(0, len(tensor), bs):
+            batch = tensor[i:i+bs].to(DEVICE)
+            r, _ = model(batch)
+            r = r.cpu().numpy()
+            D = batch.cpu().numpy()
+            all_RE.append(np.mean((r - D) ** 2, axis=(1, 2)))
+            if i % (bs * 20) == 0: print(f"  {i}/{len(tensor)}...")
+    return np.concatenate(all_RE)
 
 
 print("Tính threshold trên Val (BENIGN)...")
-RE_v, U_v = mc_eval(model, Tvl, passes=15)
+RE_v = fast_eval(model, Tvl)
 
-THR_RE = float(np.percentile(RE_v, 90))   # 90th percentile BENIGN
-THR_U  = float(np.percentile(U_v, 95))    # 95th percentile
+THR_RE = float(np.percentile(RE_v, 95))   # 95th percentile BENIGN 
 
 print(f"\n{'='*55}")
 print(f"  ★ threshold_re = {THR_RE:.6f}")
-print(f"  ★ threshold_u  = {THR_U:.10f}")
 print(f"{'='*55}")
 print(f"RE val — mean={RE_v.mean():.5f}, std={RE_v.std():.5f}")
-print(f"U  val — mean={U_v.mean():.2e}, std={U_v.std():.2e}, max={U_v.max():.2e}")
 
 
 # ─────────────────────────────────────────────────────────────
 # BƯỚC 10: ĐÁNH GIÁ TRÊN TẬP ATTACK
 # ─────────────────────────────────────────────────────────────
 print("\nĐánh giá trên Test (Attack)...")
-RE_t, U_t = mc_eval(model, Tts, passes=15)
+RE_t = fast_eval(model, Tts)
 
 RE_all = np.concatenate([RE_v,  RE_t])
 y_true = np.array([0]*len(RE_v) + [1]*len(RE_t), dtype=int)
 y_pred = (RE_all > THR_RE).astype(int)
 
 print(f"\n{'='*65}")
-print(f"KẾT QUẢ — CIC-IDS2017 | β={BETA} | log-transform | latent={LATENT}")
+print(f"KẾT QUẢ — CÔNG NGHỆ BẢO MẬT HIỆU NĂNG CAO (Mem-AE Deterministic)")
 print(f"{'='*65}")
 print(classification_report(y_true, y_pred,
       target_names=['BENIGN', 'Attack'], digits=4))
@@ -518,7 +542,7 @@ for attack_type in sorted(df_atk['Label'].unique()):
     Xsub_sc = sc.transform(Xsub)
     Wsub = make_windows(Xsub_sc, SEQ)
     if len(Wsub) == 0: continue
-    RE_sub, _ = mc_eval(model, torch.tensor(Wsub), passes=5, bs=2048)
+    RE_sub = fast_eval(model, torch.tensor(Wsub), bs=4096)
     det = (RE_sub > THR_RE).mean() * 100
     print(f"  {attack_type:<40} {len(Wsub):>8,}  {RE_sub.mean():>9.5f}  {det:>6.1f}%")
 
@@ -532,16 +556,14 @@ colab_files.download(SCALER_PATH)
 
 print(f"""
 ╔══════════════════════════════════════════════════════╗
-║  KẾT QUẢ PHIÊN TRAIN β=0.1                         ║
+║  KẾT QUẢ ĐÀO TẠO MEMORY-AE (DETERMINISTIC)         ║
 ╠══════════════════════════════════════════════════════╣
 ║  Google Drive: {DRIVE_DIR}
-║    ├── model_beta01_best.pth  ← model mới (β=0.1)  ║
-║    ├── model_beta001_backup   ← model cũ (β=0.01)  ║
-║    ├── checkpoint_beta01.pth  ← resume khi ngắt    ║
-║    ├── scaler_beta01.pkl                            ║
-║    └── CIC-IDS2017.zip        ← không cần upload   ║
+║    ├── model_proto_beta01.pth ← model Tốt Nhất     ║
+║    ├── checkpoint_proto_beta01.pth ← file resume   ║
+║    ├── scaler_proto_beta14.pkl                      ║
 ╠══════════════════════════════════════════════════════╣
-║  Cập nhật config.yaml:                              ║
+║  Cập nhật config.yaml (Production Module):          ║
 ║    model:                                           ║
 ║      feature_size: {FEATURE_SIZE}                              ║
 ║      latent_dim:   {LATENT}                              ║
@@ -549,6 +571,6 @@ print(f"""
 ║      dropout:      {DROPOUT}                           ║
 ║    detection:                                       ║
 ║      threshold_re: {THR_RE:.6f}                   ║
-║      threshold_u:  {THR_U:.8f}               ║
+║      threshold_u:  0.0 (Bỏ qua MC Dropout)          ║
 ╚══════════════════════════════════════════════════════╝
 """)

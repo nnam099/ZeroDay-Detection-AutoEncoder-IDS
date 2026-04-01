@@ -1,7 +1,7 @@
 model:
   seq_length:   10      # Số flow trong 1 cửa sổ sliding window
-  latent_dim:   32      # Kích thước không gian tiềm ẩn
-  feature_size: 10      # 10 features từ CIC-IDS2017
+  latent_dim:   4       # Kích thước không gian tiềm ẩn
+  feature_size: 14      # 14 features từ CIC-IDS2017
   nhead:        2       # Số attention heads
   num_layers:   2       # Số lớp Transformer
   dropout:      0.15    # QUAN TRỌNG: > 0 để MC Dropout hoạt động
@@ -11,8 +11,8 @@ model:
 
 detection:
   num_passes:   15      # Số lần forward pass cho MC Dropout
-  threshold_re: 0.0942  # 90th percentile BENIGN — từ kết quả train lần 3
-  threshold_u:  0.0000  # 95th percentile BENIGN uncertainty
+  threshold_re: 0.102945# 90th percentile BENIGN — từ kết quả train DTAE
+  threshold_u:  0.0     # 95th percentile BENIGN uncertainty
 
 monitor:
   interval:  60

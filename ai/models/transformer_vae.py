@@ -1,6 +1,7 @@
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class PositionalEncoding(nn.Module):
@@ -26,18 +27,41 @@ class PositionalEncoding(nn.Module):
         return x
 
 
-class TransformerVAE(nn.Module):
+class MemoryBank(nn.Module):
     """
-    Kiến trúc Conv-TransformerVAE (Áp dụng Tư duy Chuyên gia An ninh mạng).
-    
-    Cải tiến cốt lõi:
-    1. POSITIONAL ENCODING: Transformer bắt buộc phải có để hiểu "Packet nào đến trước, packet nào đến sau". Không có PE, model sẽ coi mớ packet là 1 mớ hỗn độn (Bag-of-packets) thay vì 1 chuỗi luồng mạng (Flow stream).
-    2. CONV1D LAYER: DDoS là sự "Bùng nổ" (Burstiness) gói tin trong 1 chớp mắt cục bộ. CNN1D trích xuất cực tốt đặc trưng Burst cục bộ này trước khi nhồi qua Transformer để bắt ngữ cảnh toàn cục.
+    PROTOTYPICAL MEMORY BANK: Bộ nhớ lưu trữ "Dấu vân tay" của dữ liệu Benign sạch.
+    Khi Hacker tấn công, data lạ sẽ bị ép phải map với các cấu trúc chuẩn mực này.
+    Do không khớp, sai số Reconstruction Error (RE) của Attack sẽ bị khuyếch đại văng xa.
+    """
+    def __init__(self, num_prototypes, latent_dim, shrink_thres=0.0025):
+        super().__init__()
+        self.prototypes = nn.Parameter(torch.randn(num_prototypes, latent_dim))
+        nn.init.xavier_uniform_(self.prototypes)
+        self.shrink_thres = shrink_thres
+
+    def forward(self, z):
+        # Tính độ tương đồng giữa latent z và các Prototypes
+        att = F.linear(z, self.prototypes)
+        att = F.softmax(att, dim=-1)
+        
+        if self.shrink_thres > 0:
+            att = F.relu(att - self.shrink_thres)
+            att = F.normalize(att, p=1, dim=-1)
+            
+        # Tổ hợp lại latent z từ các nguyên mẫu chuẩn
+        z_mem = F.linear(att, self.prototypes.t())
+        return z_mem, att
+
+
+class MemConvTransformerAE(nn.Module):
+    """
+    Kiến trúc Deterministic Mem-AE siêu tốc O(1) cho Security Production.
+    Cắt bỏ module VAE ngẫu nhiên nguyên gốc. Bổ sung Memory Bank.
     """
 
     def __init__(self, feature_size, seq_length, latent_dim,
-                 nhead=2, num_layers=2, dropout=0.1):
-        super(TransformerVAE, self).__init__()
+                 nhead=2, num_layers=2, dropout=0.1, num_prototypes=100):
+        super(MemConvTransformerAE, self).__init__()
 
         self.feature_size = feature_size
         self.seq_length = seq_length
@@ -46,9 +70,8 @@ class TransformerVAE(nn.Module):
         self.pos_encoder = PositionalEncoding(feature_size, max_len=seq_length)
 
         # 2. LOCAL BURST EXTRACTOR (CNN1D)
-        # Bắt dính các xung lượng (Burst) chớp nhoáng của SYN Flood / UDP Flood
         self.local_cnn = nn.Conv1d(in_channels=feature_size, out_channels=feature_size, kernel_size=3, padding=1)
-        self.act_cnn = nn.GELU()  # GELU chống bão hoà gradient tốt hơn ReLU khi log chứa nhiều số 0
+        self.act_cnn = nn.GELU()
 
         # ── ENCODER ──────────────────────────────────────────────────────────
         encoder_layer = nn.TransformerEncoderLayer(
@@ -62,8 +85,12 @@ class TransformerVAE(nn.Module):
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
         self.dropout_z = nn.Dropout(dropout)
-        self.fc_mu     = nn.Linear(feature_size * seq_length, latent_dim)
-        self.fc_logvar = nn.Linear(feature_size * seq_length, latent_dim)
+        
+        # Mapping thẳng, không chạy Reparameterize (HẾT VAE)
+        self.fc_z = nn.Linear(feature_size * seq_length, latent_dim)
+
+        # ── Lõi Lọc Độc (Memory Bank) ──────────────────────────────────────────
+        self.memory_bank = MemoryBank(num_prototypes, latent_dim)
 
         # ── DECODER ──────────────────────────────────────────────────────────
         self.decoder_input = nn.Linear(latent_dim, feature_size * seq_length)
@@ -81,41 +108,32 @@ class TransformerVAE(nn.Module):
         self.fc_final = nn.Linear(feature_size, feature_size)
 
     def encode(self, x):
-        """
-        x shape: [batch, seq_length, feature_size]
-        """
-        # A. Trích xuất đặc trưng Burst cục bộ bằng CNN
-        # Phải transpose vì Conv1D của PyTorch nhận [batch, channels, length]
+        """ x shape: [batch, seq_length, feature_size] """
+        # CNN trích đặc trưng cục bộ
         x_cnn = x.transpose(1, 2)
         x_cnn = self.act_cnn(self.local_cnn(x_cnn))
         x_cnn = x_cnn.transpose(1, 2)
 
-        # B. Cộng Residual và Nhúng Vị trí Thời gian
+        # Ghép Positional Time
         x_emb = self.pos_encoder(x + x_cnn)
 
-        # C. Phân tích chuỗi toàn cục (Global Context) bằng Transformer
+        # Biến hình Global Sequence 
         h = self.transformer_encoder(x_emb)
         h_flat = h.contiguous().view(h.size(0), -1)
-        h_flat = self.dropout_z(h_flat) # Bổ sung dropout cho chống overfit nhiễu
-        
-        mu     = self.fc_mu(h_flat)
-        logvar = self.fc_logvar(h_flat)
-        return mu, logvar
-
-    def reparameterize(self, mu, logvar):
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mu + eps * std
+        h_flat = self.dropout_z(h_flat)
+        return self.fc_z(h_flat)
 
     def decode(self, z):
         z_proj = self.decoder_input(z).view(-1, self.seq_length, self.feature_size)
-        # Thêm thứ tự thời gian vào cả decoder để tái tạo chuẩn hơn
         z_proj = self.pos_encoder(z_proj)
         out = self.transformer_decoder(z_proj, z_proj)
         return self.fc_final(out)
 
     def forward(self, x):
-        mu, logvar = self.encode(x)
-        z          = self.reparameterize(mu, logvar)
-        recon_x    = self.decode(z)
-        return recon_x, mu, logvar
+        z = self.encode(x)
+        # Ép z thành bản clean (Benign Prototype)
+        z_mem, att_weights = self.memory_bank(z)
+        
+        # Vẽ chuỗi mới
+        recon_x = self.decode(z_mem)
+        return recon_x, att_weights
