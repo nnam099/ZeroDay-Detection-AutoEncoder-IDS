@@ -1,0 +1,121 @@
+version: "3.8"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Docker Compose — DDoS Detection ELK Stack + AI Inference
+#
+# Services:
+#   elasticsearch  — Lưu trữ & tìm kiếm
+#   kibana         — Dashboard & visualization
+#   logstash       — Thu thập & xử lý logs
+#   ai_inference   — FastAPI AI model server
+#
+# Khởi động: docker compose up -d
+# ══════════════════════════════════════════════════════════════════════════════
+
+services:
+
+  # ── Elasticsearch ──────────────────────────────────────────────────────────
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+    container_name: ddos_elasticsearch
+    environment:
+      - node.name=es01
+      - cluster.name=ddos-cluster
+      - discovery.type=single-node
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-changeme}
+      - xpack.security.enabled=false          # Tắt auth để dev dễ hơn
+      - xpack.security.http.ssl.enabled=false
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    networks:
+      - ddos_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ── Kibana ─────────────────────────────────────────────────────────────────
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.13.0
+    container_name: ddos_kibana
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - KIBANA_SYSTEM_PASSWORD=${KIBANA_PASSWORD:-changeme}
+      - xpack.security.enabled=false
+    ports:
+      - "5601:5601"
+    networks:
+      - ddos_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:5601/api/status | grep -q 'available'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ── Logstash ──────────────────────────────────────────────────────────────
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.13.0
+    container_name: ddos_logstash
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      ai_inference:
+        condition: service_healthy
+    volumes:
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - ./logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      # Mount thư mục data CSV để Logstash đọc (khi dev)
+      - ${DATA_DIR:-./data}:/data:ro
+    ports:
+      - "5044:5044"   # Beats input
+      - "9600:9600"   # Logstash monitoring API
+    environment:
+      - LS_JAVA_OPTS=-Xms512m -Xmx512m
+    networks:
+      - ddos_net
+
+  # ── AI Inference Server ────────────────────────────────────────────────────
+  ai_inference:
+    build:
+      context: ./ai_inference_service
+      dockerfile: Dockerfile
+    container_name: ddos_ai_inference
+    environment:
+      - MODEL_PATH=/app/models/model_hybrid_best.pth
+      - SCALER_PATH=/app/models/scaler_hybrid.pkl
+      - THRESHOLD_PATH=/app/models/best_threshold.txt
+    volumes:
+      # Mount thư mục chứa model đã train từ Kaggle/Colab
+      - ${MODEL_DIR:-./models}:/app/models:ro
+    ports:
+      - "8000:8000"
+    networks:
+      - ddos_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:8000/health | grep -q 'ok'"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G   # Model 176k params cần ~500MB, cộng buffer
+        reservations:
+          memory: 512M
+
+volumes:
+  elasticsearch_data:
+    driver: local
+
+networks:
+  ddos_net:
+    driver: bridge

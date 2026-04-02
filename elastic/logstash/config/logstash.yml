@@ -1,0 +1,12 @@
+http.host: "0.0.0.0"
+http.port: 9600
+
+# Kết nối đến Elasticsearch
+xpack.monitoring.elasticsearch.hosts: ["http://elasticsearch:9200"]
+
+# Pipeline config
+path.config: /usr/share/logstash/pipeline
+
+# Dead letter queue — tránh mất event khi ES bị lỗi
+dead_letter_queue.enable: true
+dead_letter_queue.max_bytes: 1024mb
