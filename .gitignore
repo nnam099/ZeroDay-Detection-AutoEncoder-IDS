@@ -10,13 +10,7 @@ env/
 ENV/
 
 # Model files (quan trọng - tránh push file lớn)
-*.pt
-*.pth
-*.bin
-*.safetensors
-*.joblib
-*.pkl
-*.h5
+
 
 # Data files
 *.csv
