@@ -116,10 +116,26 @@ class HybridDDoSDetector(nn.Module):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LOAD MODEL & ARTIFACTS
+# MOCK MODE — Tự động bật khi không có model files
+# Dùng để test pipeline Logstash → AI → Elasticsearch mà không cần train model
 # ─────────────────────────────────────────────────────────────────────────────
+MOCK_MODE = False
+
+
 def load_artifacts():
+    global MOCK_MODE
     logger.info("📦 Loading model artifacts...")
+
+    # Kiểm tra xem các file model có tồn tại không
+    missing = [p for p in [MODEL_PATH, SCALER_PATH] if not os.path.exists(p)]
+    if missing:
+        logger.warning("⚠️  MOCK MODE ACTIVATED — Các file model sau không tìm thấy:")
+        for p in missing:
+            logger.warning(f"   Missing: {p}")
+        logger.warning("   Server sẽ trả kết quả giả lập (random) để test pipeline.")
+        logger.warning("   Để dùng model thật: copy model files vào thư mục /app/models/")
+        MOCK_MODE = True
+        return None, None, 0.5
 
     # Load threshold
     threshold = 0.5
@@ -142,7 +158,7 @@ def load_artifacts():
     model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
     model.eval()
     logger.info(f"  Model: loaded ({sum(p.numel() for p in model.parameters()):,} params)")
-
+    MOCK_MODE = False
     return model, scaler, threshold
 
 
@@ -259,7 +275,8 @@ def get_tier(prob: float, threshold: float) -> tuple[str, str, str]:
 def health():
     return {
         "status": "ok",
-        "model": "CNN-BiLSTM-Transformer Hybrid v3",
+        "model": "CNN-BiLSTM-Transformer Hybrid v3" if not MOCK_MODE else "MOCK_MODE (no model files)",
+        "mock_mode": MOCK_MODE,
         "threshold": threshold_global,
         "device": DEVICE,
         "seq_len": SEQ
@@ -281,6 +298,25 @@ def predict_batch(req: BatchFlowRequest):
         )
 
     try:
+        # ── MOCK MODE: Trả kết quả ngẫu nhiên để test pipeline ───────────────
+        if MOCK_MODE:
+            import random
+            prob = round(random.uniform(0.0, 1.0), 6)
+            label, confidence, tier = get_tier(prob, threshold_global)
+            latency = round((time.time() - t0) * 1000, 2)
+            logger.info(f"[MOCK][{req.sequence_id}] src={req.flows[0].source_ip} → {label} (p={prob:.3f})")
+            return PredictionResponse(
+                sequence_id=req.sequence_id,
+                source_ip=req.flows[0].source_ip,
+                label=label,
+                probability=prob,
+                confidence=confidence,
+                tier=tier,
+                latency_ms=latency,
+                threshold_used=threshold_global,
+            )
+
+        # ── REAL MODE ─────────────────────────────────────────────────────────
         # Extract & preprocess
         X = np.array([extract_features(f) for f in req.flows], dtype=np.float32)
 
@@ -352,6 +388,30 @@ def predict_stream(flow: FlowFeatures):
     window = np.array(flow_buffer[key][-SEQ:], dtype=np.float32)
     flow_buffer[key] = flow_buffer[key][-(SEQ - 1):]  # giữ SEQ-1 để tạo window tiếp
 
+    # ── MOCK MODE ────────────────────────────────────────────────────────────
+    if MOCK_MODE:
+        import random
+        prob = round(random.uniform(0.0, 1.0), 6)
+        label, confidence, tier = get_tier(prob, threshold_global)
+        latency = round((time.time() - t0) * 1000, 2)
+        logger.info(f"[MOCK][stream] src={key} → {label} (p={prob:.3f})")
+        return {
+            "status": "predicted",
+            "mock_mode": True,
+            "source_ip": key,
+            "label": label,
+            "probability": prob,
+            "confidence": confidence,
+            "tier": tier,
+            "action": {
+                "BLOCK":   "drop_connection",
+                "CAPTCHA": "rate_limit_and_challenge",
+                "ALLOW":   "pass_through",
+            }.get(tier, "pass_through"),
+            "latency_ms": latency,
+        }
+
+    # ── REAL MODE ─────────────────────────────────────────────────────────────
     # Preprocess
     window = np.where(np.isfinite(window), window, 0.0)
     window[:, LOG_IDX] = np.log1p(np.abs(window[:, LOG_IDX]))
@@ -366,6 +426,7 @@ def predict_stream(flow: FlowFeatures):
 
     return {
         "status": "predicted",
+        "mock_mode": False,
         "source_ip": key,
         "label": label,
         "probability": round(prob, 6),
