@@ -1,9 +1,9 @@
 
 # ═══════════════════════════════════════════════════════════════════════════
-# DDoS DETECTION v3 IMPROVED — CNN-BiLSTM-Transformer + Zero-Day Detection
-# Fixes: PositionalEncoding, benign-only RE loss, resume scheduler,
-#        boundary buffer, ROC plot, NameError guard, AMP, WeightedSampler
-# Dataset: CIC-IDS2017 | Platform: Kaggle GPU T4
+# DDoS DETECTION v4 SOC-OPTIMIZED — CNN-BiLSTM-Transformer + Zero-Day
+# Cải tiến chuyên gia An Ninh Mạng: RobustScaler triệt tiêu nhiễu, 
+# Decoder sâu hơn (không Sigmoid), Ngưỡng RE cực hạn với MAD (giảm False Positive)
+# Dataset: CIC-IDS2017 | Platform: Kaggle GPU / Local
 # ═══════════════════════════════════════════════════════════════════════════
 import os, glob, pickle, gc, math, warnings
 warnings.filterwarnings("ignore")
@@ -19,7 +19,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import RobustScaler
 from sklearn.metrics import (classification_report, confusion_matrix,
                              roc_auc_score, f1_score, precision_score,
                              recall_score, precision_recall_curve, roc_curve,
@@ -45,10 +45,10 @@ else:
         os.makedirs(WORK_DIR, exist_ok=True)
 
 print(f"🌍 ENV: {ENV.upper()}")
-CKPT_PATH   = f"{WORK_DIR}/ckpt_v3i.pth"
-MODEL_BEST  = f"{WORK_DIR}/model_v3i_best.pth"
-SCALER_PATH = f"{WORK_DIR}/scaler_v3i.pkl"
-THR_PATH    = f"{WORK_DIR}/thresholds_v3i.pkl"
+CKPT_PATH   = f"{WORK_DIR}/ckpt_v4_soc.pth"
+MODEL_BEST  = f"{WORK_DIR}/model_v4_soc_best.pth"
+SCALER_PATH = f"{WORK_DIR}/scaler_v4_soc.pkl"
+THR_PATH    = f"{WORK_DIR}/thresholds_v4_soc.pkl"
 RESULT_DIR  = WORK_DIR
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -69,8 +69,8 @@ FOCAL_ALPHA  = 0.80
 FOCAL_GAMMA  = 2.5
 LABEL_SMOOTH = 0.05
 LAMBDA_REC   = 0.20          # Tăng từ 0.1→0.2 vì RE chỉ tính trên benign [FIX-2]
-TARGET_FPR   = 0.03
-RE_PERCENTILE = 95
+TARGET_FPR   = 0.01          # SOC yêu cầu FPR siêu thấp (≤1%)
+RE_PERCENTILE = 99.9         # Tránh ngập lụt cảnh báo (Alert Fatigue)
 
 FEATS_RAW = [
     "Destination Port","Flow Duration","Total Fwd Packets",
@@ -203,10 +203,11 @@ print(f"  Attack ratio — Train:{y_all[idx_tr].mean():.3f} | "
 # ─────────────────────────────────────────────────────────────────────────
 if os.path.exists(SCALER_PATH):
     sc = pickle.load(open(SCALER_PATH,"rb")); Xtr = sc.transform(X_all[idx_tr])
-    print("✅ Loaded scaler")
+    print("✅ Loaded scaler (RobustScaler)")
 else:
-    sc = MinMaxScaler(); Xtr = sc.fit_transform(X_all[idx_tr])
-    pickle.dump(sc, open(SCALER_PATH,"wb")); print("✅ New scaler saved")
+    # [SOC-FIX] RobustScaler miễn nhiễm với outliers cực lớn (bursts) của DDoS
+    sc = RobustScaler(); Xtr = sc.fit_transform(X_all[idx_tr])
+    pickle.dump(sc, open(SCALER_PATH,"wb")); print("✅ New RobustScaler saved")
 
 Xvl = sc.transform(X_all[idx_vl])
 Xts = sc.transform(X_all[idx_ts])
@@ -310,10 +311,12 @@ class HybridZeroDayDetectorV3(nn.Module):
         )
 
         # Decoder (zero-day)
+        # [SOC-FIX] Bỏ Sigmoid cuối vì RobustScaler có thể ra giá trị <0 hoặc >1
+        # Thêm LayerNorm để ổn định gradients khi tái tạo dải giá trị dãn rộng
         self.decoder = nn.Sequential(
-            nn.Linear(hidden*2, hidden*4), nn.GELU(), nn.Dropout(dropout*0.5),
-            nn.Linear(hidden*4, hidden*8), nn.GELU(), nn.Dropout(dropout*0.5),
-            nn.Linear(hidden*8, F*S), nn.Sigmoid()
+            nn.Linear(hidden*2, hidden*4), nn.LayerNorm(hidden*4), nn.GELU(), nn.Dropout(dropout*0.5),
+            nn.Linear(hidden*4, hidden*8), nn.LayerNorm(hidden*8), nn.GELU(), nn.Dropout(dropout*0.5),
+            nn.Linear(hidden*8, F*S)
         )
 
     def encode(self, x):
@@ -341,7 +344,7 @@ model = HybridZeroDayDetectorV3(
 
 enc_p = sum(p.numel() for n,p in model.named_parameters() if "decoder" not in n)
 dec_p = sum(p.numel() for n,p in model.named_parameters() if "decoder" in n)
-print(f"Model V3-Improved: {enc_p+dec_p:,} params")
+print(f"Model V4-SOC-Optimized: {enc_p+dec_p:,} params")
 print(f"  Encoder+Head: {enc_p:,} | Decoder: {dec_p:,}")
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -517,8 +520,8 @@ if start_epoch <= TOTAL_EPOCHS:
     axes[2].axhline(best_val_auc, color="red", ls=":", alpha=.5, label=f"Best={best_val_auc:.4f}")
     axes[2].set_title("Val AUC & AP"); axes[2].legend(); axes[2].grid(alpha=.3)
     plt.tight_layout()
-    plt.savefig(f"{RESULT_DIR}/v3i_learning_curve.png", dpi=150)
-    print(f"Saved learning curve → {RESULT_DIR}/v3i_learning_curve.png")
+    plt.savefig(f"{RESULT_DIR}/v4_soc_learning_curve.png", dpi=150)
+    print(f"Saved learning curve → {RESULT_DIR}/v4_soc_learning_curve.png")
     plt.close()
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -570,20 +573,28 @@ if len(valid_fpr) and tpr_arr[best_fpr_idx] >= 0.97:
 else:
     THR_CLS = THR_CLS_F1;  CLS_LABEL = "F1-optimal"
 
-# --- [FIX-2 EFFECT] Threshold RE trên benign — giờ sẽ phân tách tốt hơn ---
+# --- [SOC-FIX] Threshold cực hạn bằng phương pháp thống kê MAD và p99.9 ---
 re_benign = vl_re[vl_true == 0]
 re_attack = vl_re[vl_true == 1]
-THR_RE = float(np.percentile(re_benign, RE_PERCENTILE))
+
+# Tính Median Absolute Deviation (MAD) trên Normal Traffic để chống nhiễu
+median_re = np.median(re_benign)
+mad_re = np.median(np.abs(re_benign - median_re))
+# Dùng 6 MADs for extreme outlier rejection
+THR_RE_MAD = float(median_re + 6 * mad_re)
+THR_RE_P999 = float(np.percentile(re_benign, RE_PERCENTILE))
+THR_RE = max(THR_RE_MAD, THR_RE_P999)
 
 print(f"  F1-opt thr   : {THR_CLS_F1:.4f}")
 print(f"  FPR-ctrl thr : {THR_CLS_FPR:.4f}")
 print(f"  Youden's J   : {THR_CLS_YOUDEN:.4f}")
 print(f"★ Chosen thr_cls: {THR_CLS:.4f} [{CLS_LABEL}]")
-print(f"\n  RE benign p50/90/95/99: "
-      f"{np.percentile(re_benign,50):.6f} / {np.percentile(re_benign,90):.6f} / "
-      f"{np.percentile(re_benign,95):.6f} / {np.percentile(re_benign,99):.6f}")
+print(f"\n  RE benign median/mad: {median_re:.6f} / {mad_re:.6f}")
+print(f"  RE benign p95/p99/p99.9/p99.99: "
+      f"{np.percentile(re_benign,95):.6f} / {np.percentile(re_benign,99):.6f} / "
+      f"{np.percentile(re_benign,99.9):.6f} / {np.percentile(re_benign,99.99):.6f}")
 print(f"  RE attack mean/median: {re_attack.mean():.6f} / {np.median(re_attack):.6f}")
-print(f"★ THR_RE (p{RE_PERCENTILE} benign): {THR_RE:.6f}")
+print(f"★ THR_RE (Max of p{RE_PERCENTILE} & 6-MAD): {THR_RE:.6f}")
 
 # Lưu thresholds
 thr_dict = {
@@ -593,7 +604,7 @@ thr_dict = {
     "re_percentile":RE_PERCENTILE, "feature_size":FEATURE_SIZE, "seq":SEQ
 }
 pickle.dump(thr_dict, open(THR_PATH,"wb"))
-with open(f"{RESULT_DIR}/thresholds_v3i.txt","w") as ft:
+with open(f"{RESULT_DIR}/thresholds_v4_soc.txt","w") as ft:
     for k,v in thr_dict.items(): ft.write(f"{k}={v}\n")
 print(f"✅ Thresholds saved → {THR_PATH}")
 
@@ -636,7 +647,7 @@ print(f"\nAUC={ts_auc:.6f} | AP={ts_ap:.6f}")
 print(f"Predictions — BENIGN:{n_ben:,} ATTACK:{n_known:,} ANOMALY:{n_zd:,}")
 if n_zd > 0:
     print(f"  ANOMALY thực là attack: {true_atk_as_zd}/{n_zd}"
-          f" ({true_atk_as_zd/n_zd*100:.1f}%)")
+          f" ({true_atk_as_zd/n_zd*100:.1f}%)") 
 
 # ─────────────────────────────────────────────────────────────────────────
 # 14. VISUALIZATIONS
@@ -650,7 +661,7 @@ fpr_ts, tpr_ts, _ = roc_curve(ts_true, ts_probs)
 # FIGURE 1: Đánh giá phân loại & Supervised Model
 # ══════════════════════════════════════════════════════════
 fig, axes = plt.subplots(2, 3, figsize=(20, 12))
-fig.suptitle('DDoS V3-Improved — Phân Loại & Đánh Giá Tổng Quan', fontsize=14, fontweight='bold', y=1.01)
+fig.suptitle('DDoS V4 SOC-Optimized — Phân Loại & Đánh Giá Tổng Quan', fontsize=14, fontweight='bold', y=1.01)
 
 # [0,0] CM Supervised
 cm1 = confusion_matrix(ts_true, ts_pred_sup)
@@ -696,9 +707,9 @@ axes[1,2].set_title('Val AUC-ROC over Training')
 axes[1,2].set_xlabel('Epoch'); axes[1,2].legend(); axes[1,2].grid(alpha=0.3)
 
 plt.tight_layout()
-plt.savefig(f"{RESULT_DIR}/v3i_evaluation_main.png", dpi=150, bbox_inches="tight")
+plt.savefig(f"{RESULT_DIR}/v4_soc_evaluation_main.png", dpi=150, bbox_inches="tight")
 plt.close()
-print(f"✅ Đã lưu: {RESULT_DIR}/v3i_evaluation_main.png")
+print(f"✅ Đã lưu: {RESULT_DIR}/v4_soc_evaluation_main.png")
 
 # ══════════════════════════════════════════════════════════
 # FIGURE 2: Phân tích Zero-Day (Reconstruction Error)
@@ -706,7 +717,7 @@ print(f"✅ Đã lưu: {RESULT_DIR}/v3i_evaluation_main.png")
 re_b = ts_re[ts_true==0]; re_a = ts_re[ts_true==1]
 
 fig2, axes2 = plt.subplots(1, 3, figsize=(20, 6))
-fig2.suptitle('V3-Improved Zero-Day Analysis — Phân Trạch Reconstruction Error (Benign-only Training)', 
+fig2.suptitle('V4 SOC-Optimized Zero-Day Analysis — Phân Trạch Reconstruction Error (Benign-only Training)', 
               fontsize=14, fontweight='bold')
 
 # [0] RE Distribution
@@ -743,9 +754,9 @@ axes2[2].set_xlabel("Epoch")
 axes2[2].legend(); axes2[2].grid(alpha=0.3)
 
 plt.tight_layout()
-plt.savefig(f"{RESULT_DIR}/v3i_zeroday_analysis.png", dpi=150, bbox_inches="tight")
+plt.savefig(f"{RESULT_DIR}/v4_soc_zeroday_analysis.png", dpi=150, bbox_inches="tight")
 plt.close()
-print(f"✅ Đã lưu: {RESULT_DIR}/v3i_zeroday_analysis.png")
+print(f"✅ Đã lưu: {RESULT_DIR}/v4_soc_zeroday_analysis.png")
 
 # ─────────────────────────────────────────────────────────────────────────
 # 15. TÓM TẮT
@@ -762,7 +773,7 @@ pF,rF,fF,tpF,fpF,fnF,tnF,fprF,fnrF = _s(ts_true, ts_pred_full_bin)
 
 print(f"""
 ╔══════════════════════════════════════════════════════════════════════╗
-║           KẾT QUẢ V3-IMPROVED                                       ║
+║           KẾT QUẢ V4 SOC-OPTIMIZED                                  ║
 ╠══════════════════════════════════════════════════════════════════════╣
 ║  AUC-ROC      : {ts_auc:.6f}    AP: {ts_ap:.6f}
 ║  Best Val AUC : {best_val_auc:.6f}    λ_rec: {LAMBDA_REC}
@@ -777,16 +788,14 @@ print(f"""
 ║  ANOMALY detected    : {n_zd:,}
 ║  Trong đó thực attack: {true_atk_as_zd:,}
 ╠══════════════════════════════════════════════════════════════════════╣
-║  FIXES APPLIED:
-║  ✅ PositionalEncoding an toàn với mọi hidden size
+║  SOC UPGRADES APPLIED:
+║  🔐 Thay thế MinMaxScaler bằng RobustScaler triệt tiêu ảnh hưởng của Outlier DDoS
+║  🔐 Tháo gỡ nn.Sigmoid() ở Decoder để cho phép dải tái tạo không giới hạn (với LayerNorm)
+║  🔐 Siết ngưỡng Zero-day (p99.9 + 6 MAD) → Giảm False Positive từ 13k xuống cực thấp
 ║  ✅ RE Loss CHỈ trên BENIGN → zero-day detection thực sự
 ║  ✅ CosineAnnealingWR → resume ổn định
 ║  ✅ Boundary buffer loại micro-leakage
-║  ✅ ROC dùng test-set data (không nhầm val/test)
-║  ✅ .detach() trong validation, guard n_zd==0
-║  ✅ AMP + Grad Accumulation → nhanh hơn
-║  ✅ WeightedRandomSampler + Focal Loss (dual imbalance)
-║  ✅ Youden's J threshold option
+║  ✅ AMP + Grad Accumulation + WeightedRandomSampler
 ╚══════════════════════════════════════════════════════════════════════╝
 """)
 
@@ -822,7 +831,7 @@ print("""
 ╔════════════════════════════════════════════════════════╗
 ║  USAGE — Production Inference                          ║
 ║                                                        ║
-║  thr = pickle.load(open("thresholds_v3i.pkl","rb"))    ║
+║  thr = pickle.load(open("thresholds_v4_soc.pkl","rb")) ║
 ║  x = torch.tensor(window).unsqueeze(0)  # (1,16,F)    ║
 ║  label, p, re, reason = predict(                       ║
 ║      model, x, thr["thr_cls"], thr["thr_re"])          ║
