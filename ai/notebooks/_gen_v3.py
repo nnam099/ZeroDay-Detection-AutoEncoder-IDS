@@ -2,7 +2,10 @@
 # Script tự động tạo ddos_hybrid_v3.py
 import os
 
-OUT = os.path.join(os.path.dirname(__file__), "ddos_hybrid_v3.py")
+OUT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)) if "__file__" in dir() else os.getcwd(),
+    "ddos_hybrid_v3.py"
+)
 
 PARTS = []
 
