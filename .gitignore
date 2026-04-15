@@ -13,10 +13,7 @@ ENV/
 
 
 # Data files
-*.csv
-*.pcap
-*.pcapng
-data/
+
 
 # Notebooks
 .ipynb_checkpoints/
@@ -34,5 +31,9 @@ logs/
 *.log
 
 # Output
-outputs/
-results/
+transformer-32-feature/datasets/
+*.npy
+*.parquet
+*.zip
+*.pth
+*.pt
