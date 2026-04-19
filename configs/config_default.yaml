@@ -1,0 +1,21 @@
+training:
+  epochs: 100
+  batch_size: 512
+  lr: 3.0e-4
+  patience: 20
+  seed: 42
+  num_workers: 2
+model:
+  hidden: 256
+  ae_hidden: 128
+loss:
+  lambda_con: 0.3
+  focal_gamma: 2.0
+  dos_weight: 8.0
+detection:
+  target_fpr: 0.05
+  n_clusters: 25
+paths:
+  data_dir: data/
+  save_dir: checkpoints/
+  plot_dir: plots/
