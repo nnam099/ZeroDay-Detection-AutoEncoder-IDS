@@ -1,6 +1,0 @@
-torch
-kafka-python
-redis
-pandas
-elasticsearch
-numpy
