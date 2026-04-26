@@ -150,7 +150,7 @@ ids-v14/
 ### 1. Clone & Install
 
 ```bash
-[git clone https://github.com/<your-username>/ids-v14.git](https://github.com/nnam099/DDoS-Mitigation.git)
+git clone https://github.com/<your-username>/ids-v14.git](https://github.com/nnam099/DDoS-Mitigation.git
 DDoS-Mitigation
 pip install -r requirements.txt
 ```
