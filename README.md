@@ -100,6 +100,11 @@ AutoEncoder (parallel branch):
 
 ---
 
+### Demo
+<video src="assets/demo.mp4" controls="controls" style="max-width: 100%;">
+  Trình duyệt của bạn không hỗ trợ thẻ video.
+</video>
+
 ## Project Structure
 
 ```
