@@ -108,13 +108,29 @@ def load_model():
     if not os.path.exists(MODEL_PATH):
         return None, None, None, None
     try:
-        checkpoint = torch.load(MODEL_PATH, map_location='cpu')
-        model = checkpoint.get('model', checkpoint)
-        if hasattr(model, 'eval'):
-            model.eval()
+        # Them IDSModel vao sys.path
+        IDS_SRC = r"D:\Kì 2 Năm 3\Thực Tập Cơ Sở\AI_Train\ZeroDay-Detection-AutoEncoder-IDS\src"
+        if IDS_SRC not in sys.path:
+            sys.path.insert(0, IDS_SRC)
+        from ids_v14_unswnb15 import IDSModel
+
+        checkpoint = torch.load(MODEL_PATH, map_location='cpu', weights_only=False)
+        n_feat = checkpoint['n_features']
+        n_cls  = checkpoint['n_classes']
+
+        model = IDSModel(n_features=n_feat, n_classes=n_cls, hidden=128, ae_hidden=64)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        model.eval()
+
         with open(PIPE_PATH, 'rb') as f:
             pipeline = pickle.load(f)
-        return model, pipeline['scaler'], pipeline['feature_names'], pipeline.get('label_encoder')
+
+        scaler        = pipeline['scaler']
+        feature_names = pipeline.get('feature_names', pipeline.get('feat_cols', []))
+        label_encoder = pipeline['label_encoder']
+
+        return model, scaler, feature_names, label_encoder
+
     except Exception as e:
         st.error(f"Loi load model: {e}")
         return None, None, None, None
@@ -554,17 +570,19 @@ elif page == "[3] Ask AI":
 
         with st.chat_message("assistant"):
             with st.spinner("Dang suy nghi..."):
-                if HAS_LLM and 'agent' in st.session_state.get('_comps', {}):
-                    answer = st.session_state['_comps']['agent'].explain_to_analyst(
-                        question, last
-                    )
+                if HAS_LLM:
+                    try:
+                        agent = SOCTriageAgent()
+                        answer = agent.explain_to_analyst(question, last)
+                    except Exception as e:
+                        answer = f"Loi LLM Agent: {e}. Vui long kiem tra lai provider trong llm_agent.py."
                 else:
                     # Fallback: dung Gemini truc tiep neu co API key
                     api_key = os.getenv("GEMINI_API_KEY", "")
                     if api_key:
                         try:
                             genai.configure(api_key=api_key)
-                            m = genai.GenerativeModel("gemini-1.5-flash")
+                            m = genai.GenerativeModel("gemini-2.0-flash")
                             prompt = f"""Ban la SOC Analyst AI. Context ve alert:
 Alert ID: {last['alert_id']}
 Class: {last['predicted_class']}
@@ -578,9 +596,9 @@ Cau hoi cua analyst: {question}
 Tra loi ngan gon, ro rang bang tieng Viet."""
                             answer = m.generate_content(prompt).text
                         except Exception as e:
-                            answer = f"Loi LLM: {e}. Kiem tra GEMINI_API_KEY trong file .env"
+                            answer = f"Loi LLM (Gemini Fallback): {e}. Kiem tra GEMINI_API_KEY trong file .env"
                     else:
-                        answer = "Chua cau hinh API key. Them GEMINI_API_KEY vao file .env roi restart app."
+                        answer = "Chua cau hinh API key. Them GEMINI_API_KEY vao file .env hoac dung provider khac trong llm_agent.py."
 
             st.write(f"**SOC AI:** {answer}")
             st.session_state.messages.append({"role": "assistant", "content": answer})
