@@ -5,22 +5,26 @@
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from ids_v14_unswnb15 import CFG, run_demo
+from ids_v14_unswnb15 import CFG, run_full
 
-# Output thang vao DDoS-Mitigation
-DDOS_DIR = r"D:\Kì 2 Năm 3\Thực Tập Cơ Sở\AI_Train\DDoS-Mitigation"
+# Output vao dung project hien tai
+DDOS_DIR = r"D:\Kì 2 Năm 3\Thực Tập Cơ Sở\AI_Train\ZeroDay-Detection-AutoEncoder-IDS"
 
 CFG.save_dir = os.path.join(DDOS_DIR, "checkpoints")
 CFG.plot_dir = os.path.join(DDOS_DIR, "plots")
-CFG.demo     = True   # Dung du lieu gia lap, nhe may
-CFG.epochs   = 10
-CFG.patience = 5
+CFG.data_dir = os.path.join(DDOS_DIR, "data", "quick_train") # Chay tren dataset nho cho nhanh
+CFG.demo     = False  # Train tren data that, KHONG phai data gia lap!
+CFG.epochs   = 5
+CFG.patience = 3
+
+CFG.num_workers = 0 # Fix PyTorch Windows multiprocessing crash
 
 os.makedirs(CFG.save_dir, exist_ok=True)
 os.makedirs(CFG.plot_dir, exist_ok=True)
 
-print("Dang chay Demo Mode (nhe - khong can GPU, ~2-3 phut)...")
-run_demo(CFG)
+if __name__ == '__main__':
+    print("Dang train model bang du lieu THAT (UNSW-NB15) de tuong thich voi Dashboard...")
+    run_full(CFG)
 
-print("\n=== XONG ===")
-print(f"File da duoc luu tai: {CFG.save_dir}")
+    print("\n=== XONG ===")
+    print(f"File da duoc luu tai: {CFG.save_dir}")

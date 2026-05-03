@@ -23,12 +23,13 @@ class SHAPExplainer:
         self.feature_names = feature_names
         self.device = device
 
-        # Wrap model thành function nhận numpy → trả numpy probability
-        def model_predict(X_numpy):
-            X_scaled = self.scaler.transform(X_numpy)
-            X_tensor = torch.FloatTensor(X_scaled).to(device)
+        # Wrap model thành function nhận numpy ĐÃ ĐƯỢC SCALE → trả numpy probability
+        def model_predict(X_scaled):
+            X_tensor = torch.FloatTensor(X_scaled).to(self.device)
             with torch.no_grad():
-                logits = self.model(X_tensor)          # shape: (N, n_classes)
+                outputs = self.model(X_tensor)
+                # ids_v14_unswnb15 trả về (logits, fv), ta chỉ cần logits
+                logits = outputs[0] if isinstance(outputs, tuple) else outputs
                 probs = torch.softmax(logits, dim=1)
             return probs.cpu().numpy()
 
@@ -60,7 +61,7 @@ class SHAPExplainer:
         shap_values = self.explainer.shap_values(alert_scaled, nsamples=100)
 
         # shap_values là list [class_0, class_1, ...] — lấy class có prob cao nhất
-        probs = self.predict_fn(alert_features_raw)[0]
+        probs = self.predict_fn(alert_scaled)[0]
         predicted_class = np.argmax(probs)
         sv = shap_values[predicted_class][0]  # shape: (55,)
 

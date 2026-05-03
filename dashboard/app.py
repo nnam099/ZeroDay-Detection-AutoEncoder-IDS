@@ -81,7 +81,9 @@ MODEL_PATH = os.path.join(CKPT_DIR, 'ids_v14_model.pth')
 PIPE_PATH  = os.path.join(CKPT_DIR, 'ids_v14_pipeline.pkl')
 DATA_PATH  = os.path.join(DATA_DIR, 'UNSW_NB15_training-set.csv')
 
-CLASS_NAMES  = ["Normal", "DoS", "Exploits", "Reconnaissance", "Generic"]
+# CLASS_NAMES se duoc load tu label_encoder sau khi model load
+# De tranh sai thu tu do LabelEncoder sort theo alphabet
+CLASS_NAMES  = ["Normal", "DoS", "Exploits", "Reconnaissance", "Generic"]  # fallback
 AE_THRESHOLD = 0.5
 
 # ── Sidebar navigation ────────────────────────────────────────────
@@ -108,17 +110,17 @@ def load_model():
     if not os.path.exists(MODEL_PATH):
         return None, None, None, None
     try:
-        # Them IDSModel vao sys.path
-        IDS_SRC = r"D:\Kì 2 Năm 3\Thực Tập Cơ Sở\AI_Train\ZeroDay-Detection-AutoEncoder-IDS\src"
-        if IDS_SRC not in sys.path:
-            sys.path.insert(0, IDS_SRC)
+        # Import IDSModel từ src/ (da duoc them vao sys.path o tren)
         from ids_v14_unswnb15 import IDSModel
 
         checkpoint = torch.load(MODEL_PATH, map_location='cpu', weights_only=False)
-        n_feat = checkpoint['n_features']
-        n_cls  = checkpoint['n_classes']
+        n_feat     = checkpoint['n_features']
+        n_cls      = checkpoint['n_classes']
+        # Lay hidden size truc tiep tu checkpoint de tranh size mismatch
+        hidden    = checkpoint.get('hidden', 256)
+        ae_hidden = checkpoint.get('ae_hidden', 128)
 
-        model = IDSModel(n_features=n_feat, n_classes=n_cls, hidden=128, ae_hidden=64)
+        model = IDSModel(n_features=n_feat, n_classes=n_cls, hidden=hidden, ae_hidden=ae_hidden)
         model.load_state_dict(checkpoint['model_state_dict'])
         model.eval()
 
@@ -135,23 +137,74 @@ def load_model():
         st.error(f"Loi load model: {e}")
         return None, None, None, None
 
+model, scaler, feature_names, label_encoder = load_model()
+
+# Lay CLASS_NAMES dung thu tu tu label_encoder (tranh sai do sort alphabet)
+if label_encoder is not None:
+    CLASS_NAMES = list(label_encoder.classes_)
+
+def preprocess_raw_df(df_raw: pd.DataFrame, feat_cols: list) -> np.ndarray:
+    """
+    Ap dung dung cac buoc tien xu ly nhu trong prepare_splits().
+    Output LUON CO DUNG SO LUONG FEATURES = len(feat_cols), thu tu khop voi scaler.
+    """
+    from ids_v14_unswnb15 import engineer_features
+    from sklearn.preprocessing import LabelEncoder as _LE
+
+    df = df_raw.copy()
+
+    # 1. Encode cac cot categorical -> _num columns
+    for cat in ['proto', 'service', 'state']:
+        if cat in df.columns:
+            le = _LE()
+            df[f'{cat}_num'] = le.fit_transform(df[cat].astype(str).fillna('unk'))
+
+    # 2. Chay feature engineering (tao bytes_ratio, log_sbytes, ...)
+    existing_numeric = [c for c in df.columns if c not in
+        {'attack_cat', 'label', 'label_binary', 'srcip', 'dstip',
+         'sport', 'dsport', 'stime', 'ltime', 'id', 'proto', 'service', 'state'}
+    ]
+    try:
+        df, _ = engineer_features(df, existing_numeric)
+    except Exception:
+        pass
+
+    # 3. Chon DUNG THU TU feat_cols, padding = 0 neu thieu cot
+    #    Dam bao output co dung (n_rows, len(feat_cols)) khop voi scaler
+    rows = len(df)
+    out  = np.zeros((rows, len(feat_cols)), dtype=np.float32)
+    for i, col in enumerate(feat_cols):
+        if col in df.columns:
+            try:
+                out[:, i] = pd.to_numeric(df[col], errors='coerce').fillna(0).values
+            except Exception:
+                out[:, i] = 0.0
+        # else: cot khong co -> de 0
+
+    out = np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
+    return out
+
+
 @st.cache_resource
 def load_background(_scaler, _feature_names):
     if not os.path.exists(DATA_PATH):
         return None
     try:
-        df      = pd.read_csv(DATA_PATH)
+        df        = pd.read_csv(DATA_PATH)
         label_col = 'label' if 'label' in df.columns else df.columns[-1]
-        normal  = df[df[label_col] == 0].sample(min(200, len(df[df[label_col]==0])), random_state=42)
-        feat_cols = [c for c in normal.columns if c not in ['label', 'attack_cat', 'id']]
-        if _feature_names:
-            feat_cols = [c for c in _feature_names if c in normal.columns]
-        return normal[feat_cols].values
+        normal    = df[df[label_col] == 0].sample(
+            min(200, len(df[df[label_col] == 0])), random_state=42
+        )
+        bg_arr = preprocess_raw_df(normal, _feature_names or [])
+        if bg_arr.shape[1] == 0:
+            st.warning("[SHAP] Khong tim thay feature khop — SHAP se bi tat")
+            return None
+        return bg_arr
     except Exception as e:
-        st.error(f"Loi load data: {e}")
+        st.error(f"Loi load background data: {e}")
         return None
 
-model, scaler, feature_names, label_encoder = load_model()
+
 
 @st.cache_resource
 def get_components(_model, _scaler, _feature_names, _bg):
@@ -160,7 +213,7 @@ def get_components(_model, _scaler, _feature_names, _bg):
         try:
             comps['explainer'] = SHAPExplainer(_model, _scaler, _feature_names, _bg)
         except Exception as e:
-            st.warning(f"SHAP init loi: {e}")
+            st.warning(f"SHAP init loi: {type(e).__name__}: {e}")
     if HAS_MITRE:
         comps['mapper'] = MITREMapper()
     if HAS_LLM:
@@ -210,26 +263,27 @@ def mock_inference(n_features=49):
 
 def run_full_pipeline(raw_features: np.ndarray, comps: dict):
     """Chay toan bo pipeline that: IDS -> SHAP -> MITRE -> LLM."""
-    # 1. Inference
+    # 1. Inference — IDSModel.forward() tra ve (logits, fv)
     scaled = scaler.transform(raw_features)
     tensor = torch.FloatTensor(scaled)
     with torch.no_grad():
-        logits = model(tensor)
-        probs  = torch.softmax(logits, dim=1).numpy()[0]
+        outputs = model(tensor)
+        logits  = outputs[0] if isinstance(outputs, tuple) else outputs
+        probs   = torch.softmax(logits, dim=1).numpy()[0]
 
-    max_prob     = float(probs.max())
-    pred_idx     = int(probs.argmax())
-    pred_class   = CLASS_NAMES[pred_idx] if pred_idx < len(CLASS_NAMES) else "Unknown"
+    max_prob   = float(probs.max())
+    pred_idx   = int(probs.argmax())
+    pred_class = CLASS_NAMES[pred_idx] if pred_idx < len(CLASS_NAMES) else "Unknown"
 
-    # AE score - thu lay tu model neu co
-    if hasattr(model, 'ae_score'):
-        ae_score = float(model.ae_score(tensor).item())
-    elif hasattr(model, 'autoencoder'):
-        with torch.no_grad():
-            recon = model.autoencoder(tensor)
+    # AE score tu AutoEncoder
+    with torch.no_grad():
+        if hasattr(model, 'ae'):
+            ae_score = float(model.ae.recon_error(tensor).mean().item())
+        elif hasattr(model, 'autoencoder'):
+            recon    = model.autoencoder(tensor)
             ae_score = float(torch.mean((tensor - recon) ** 2).item())
-    else:
-        ae_score = float(1.0 - max_prob + np.random.uniform(0, 0.1))
+        else:
+            ae_score = float(1.0 - max_prob + np.random.uniform(0, 0.1))
 
     hybrid_score = 0.5 * ae_score + 0.5 * (1 - max_prob)
     is_zeroday   = ae_score > AE_THRESHOLD and max_prob < 0.6
@@ -448,15 +502,10 @@ elif page == "[2] Analyze Alert":
                     with st.spinner("Dang phan tich... (SHAP mat ~30 giay)"):
                         df = pd.read_csv(DATA_PATH)
                         label_col = 'label' if 'label' in df.columns else df.columns[-1]
-                        if prefer_attack:
-                            pool = df[df[label_col] == 1]
-                        else:
-                            pool = df
-                        sample    = pool.sample(1, random_state=np.random.randint(0, 9999))
-                        feat_cols = [c for c in (feature_names or []) if c in sample.columns]
-                        if not feat_cols:
-                            feat_cols = [c for c in sample.columns if c not in ['label','attack_cat','id']]
-                        raw    = sample[feat_cols].values
+                        pool   = df[df[label_col] == 1] if prefer_attack else df
+                        sample = pool.sample(1, random_state=np.random.randint(0, 9999))
+                        # Tien xu ly dung nhu luc train (encode + engineer features)
+                        raw    = preprocess_raw_df(sample, feature_names or [])
                         result = run_full_pipeline(raw, comps)
                         llm    = get_llm_analysis(result, comps)
 
@@ -506,7 +555,9 @@ elif page == "[2] Analyze Alert":
             display_result(result, llm)
 
     else:  # Upload CSV
-        uploaded = st.file_uploader("Upload CSV (1 dong, dung feature names tu v14)", type="csv")
+        uploaded = st.file_uploader(
+            "Upload CSV (du lieu mang UNSW-NB15 raw, co cac cot feature goc)", type="csv"
+        )
         if uploaded:
             raw_df = pd.read_csv(uploaded)
             st.write("Preview:", raw_df.head())
@@ -515,11 +566,18 @@ elif page == "[2] Analyze Alert":
                     result = mock_inference()
                     llm    = get_llm_analysis(result, comps)
                 else:
-                    feat_cols = [c for c in (feature_names or []) if c in raw_df.columns]
-                    raw    = raw_df[feat_cols].values[:1]
-                    result = run_full_pipeline(raw, comps)
-                    llm    = get_llm_analysis(result, comps)
-                display_result(result, llm)
+                    # Dung preprocess_raw_df de xu ly giong luc train
+                    raw = preprocess_raw_df(raw_df.head(1), feature_names or [])
+                    if raw.shape[1] == 0 or (raw == 0).all():
+                        st.error(
+                            "Khong tim thay features hop le trong file CSV nay. "
+                            "Vui long upload file CSV co cac cot feature goc cua UNSW-NB15 "
+                            "(khong phai file ket qua phan tich)."
+                        )
+                    else:
+                        result = run_full_pipeline(raw, comps)
+                        llm    = get_llm_analysis(result, comps)
+                        display_result(result, llm)
 
 # ═════════════════════════════════════════════════════════════════
 # PAGE: Ask AI
@@ -575,30 +633,9 @@ elif page == "[3] Ask AI":
                         agent = SOCTriageAgent()
                         answer = agent.explain_to_analyst(question, last)
                     except Exception as e:
-                        answer = f"Loi LLM Agent: {e}. Vui long kiem tra lai provider trong llm_agent.py."
+                        answer = f"Loi LLM Agent: {e}. Vui long kiem tra lai provider va API Key trong file .env."
                 else:
-                    # Fallback: dung Gemini truc tiep neu co API key
-                    api_key = os.getenv("GEMINI_API_KEY", "")
-                    if api_key:
-                        try:
-                            genai.configure(api_key=api_key)
-                            m = genai.GenerativeModel("gemini-2.0-flash")
-                            prompt = f"""Ban la SOC Analyst AI. Context ve alert:
-Alert ID: {last['alert_id']}
-Class: {last['predicted_class']}
-Hybrid Score: {last['hybrid_score']:.3f}
-AE Score: {last['ae_score']:.3f}
-Zero-Day: {'Co' if last['is_zeroday'] else 'Khong'}
-SHAP info: {last.get('shap_summary', 'N/A')[:300]}
-MITRE: {last.get('mitre_summary', 'N/A')[:200]}
-
-Cau hoi cua analyst: {question}
-Tra loi ngan gon, ro rang bang tieng Viet."""
-                            answer = m.generate_content(prompt).text
-                        except Exception as e:
-                            answer = f"Loi LLM (Gemini Fallback): {e}. Kiem tra GEMINI_API_KEY trong file .env"
-                    else:
-                        answer = "Chua cau hinh API key. Them GEMINI_API_KEY vao file .env hoac dung provider khac trong llm_agent.py."
+                    answer = "Khong tim thay llm_agent.py. Vui long kiem tra lai source code."
 
             st.write(f"**SOC AI:** {answer}")
             st.session_state.messages.append({"role": "assistant", "content": answer})
@@ -650,11 +687,11 @@ with open('checkpoints/ids_v14_pipeline.pkl', 'wb') as f:
 print("Da luu model va pipeline!")
     """, language="python")
 
-    st.markdown("### Buoc 3: Lay Gemini API Key (mien phi)")
-    st.markdown("1. Vao: https://aistudio.google.com/app/apikey")
-    st.markdown("2. Click 'Create API Key'")
-    st.markdown("3. Tao file `.env` trong thu muc goc:")
-    st.code("GEMINI_API_KEY=AIzaSy...", language="bash")
+    st.markdown("### Buoc 3: Cau hinh API Key cho LLM")
+    st.markdown("1. Dang ky API Key tai nha cung cap ban chon (Vi du: https://console.groq.com/keys)")
+    st.markdown("2. Mo file `src/llm_agent.py` va chon `LLM_PROVIDER`")
+    st.markdown("3. Tao file `.env` trong thu muc goc va them key tuong ung:")
+    st.code("GROQ_API_KEY=gsk_...\n# GEMINI_API_KEY=AIzaSy...\n# OPENAI_API_KEY=sk-...", language="bash")
 
     st.markdown("### Buoc 4: Chay app")
     st.code("""
@@ -667,7 +704,7 @@ streamlit run app.py
         "Model file (ids_v14_model.pth)": os.path.exists(MODEL_PATH),
         "Pipeline file (ids_v14_pipeline.pkl)": os.path.exists(PIPE_PATH),
         "Data file (UNSW_NB15_training-set.csv)": os.path.exists(DATA_PATH),
-        "GEMINI_API_KEY trong .env": bool(os.getenv("GEMINI_API_KEY")),
+        "API Key (Bat ky trong .env)": any([os.getenv("GROQ_API_KEY"), os.getenv("GEMINI_API_KEY"), os.getenv("OPENAI_API_KEY"), os.getenv("ANTHROPIC_API_KEY")]),
         "Module explainer.py": HAS_EXPLAINER,
         "Module mitre_mapper.py": HAS_MITRE,
         "Module llm_agent.py": HAS_LLM,
