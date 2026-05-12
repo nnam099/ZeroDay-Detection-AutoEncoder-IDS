@@ -72,6 +72,51 @@ st.markdown("""
         background: var(--soc-panel-2);
         margin-right: 6px;
     }
+    .soc-detail-title {
+        color: var(--soc-muted);
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-bottom: 2px;
+    }
+    .soc-detail-value {
+        color: var(--soc-text);
+        font-size: 1.02rem;
+        font-weight: 650;
+        margin-bottom: 10px;
+    }
+    .soc-pill-red { border-color: rgba(255,77,94,0.5); color: #ff8d99; }
+    .soc-pill-blue { border-color: rgba(58,160,255,0.5); color: #8bc9ff; }
+    .soc-pill-green { border-color: rgba(55,214,122,0.5); color: #8cf0b5; }
+    .sidebar-brand {
+        border: 1px solid var(--soc-line);
+        background: #0f1720;
+        border-radius: 8px;
+        padding: 14px 12px;
+        margin: 6px 0 14px 0;
+    }
+    .sidebar-brand-title { font-size: 1.05rem; font-weight: 750; color: #f4f8fc; }
+    .sidebar-brand-sub { color: var(--soc-muted); font-size: 0.74rem; margin-top: 4px; }
+    .health-grid {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px 10px;
+        align-items: center;
+        border: 1px solid var(--soc-line);
+        border-radius: 8px;
+        padding: 12px;
+        background: #0f1720;
+    }
+    .health-label { color: var(--soc-muted); font-size: 0.75rem; text-transform: uppercase; }
+    .health-ok, .health-warn, .health-bad {
+        border-radius: 999px;
+        padding: 2px 8px;
+        font-size: 0.70rem;
+        font-weight: 700;
+    }
+    .health-ok { color: #8cf0b5; background: rgba(55,214,122,0.10); border: 1px solid rgba(55,214,122,0.35); }
+    .health-warn { color: #ffd77a; background: rgba(246,195,67,0.10); border: 1px solid rgba(246,195,67,0.35); }
+    .health-bad { color: #ff9ca6; background: rgba(255,77,94,0.10); border: 1px solid rgba(255,77,94,0.35); }
     .sev-critical { color: var(--soc-red); font-weight: 700; }
     .sev-high { color: #ff9b55; font-weight: 700; }
     .sev-medium { color: var(--soc-yellow); font-weight: 700; }
@@ -206,29 +251,45 @@ def _build_categorical_maps_from_sample() -> dict:
         return {}
 
 # ── Sidebar navigation ────────────────────────────────────────────
-st.sidebar.title("SOC AI Platform")
-st.sidebar.caption(f"{MODEL_VERSION.upper()} + SHAP + MITRE ATT&CK + LLM")
-st.sidebar.markdown("---")
+NAV_ITEMS = ["[1] Dashboard", "[2] Analyze Alert", "[3] Zero-Day Logs", "[4] Ask AI", "[5] Setup Guide"]
+if "nav_page" not in st.session_state:
+    st.session_state["nav_page"] = NAV_ITEMS[0]
 
-page = st.sidebar.radio(
-    "Navigation",
-    ["[1] Dashboard", "[2] Analyze Alert", "[3] Zero-Day Logs", "[4] Ask AI", "[5] Setup Guide"]
+st.sidebar.markdown(
+    f"""
+    <div class="sidebar-brand">
+        <div class="sidebar-brand-title">SOC AI Platform</div>
+        <div class="sidebar-brand-sub">IDS {MODEL_VERSION.upper()} | SHAP | MITRE ATT&CK | LLM</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("**Status:**")
-st.sidebar.write("SHAP:", "OK" if HAS_EXPLAINER else "MISSING")
-st.sidebar.write("MITRE:", "OK" if HAS_MITRE else "MISSING")
-if not HAS_LLM:
-    st.sidebar.write("LLM:", "MISSING")
-elif not LLM_KEY_OK:
-    st.sidebar.write("LLM:", "NO API KEY")
-else:
-    st.sidebar.write("LLM:", "OK")
-st.sidebar.write("Version:", MODEL_VERSION.upper())
-st.sidebar.write("Model:", "OK" if os.path.exists(MODEL_PATH) else "NOT FOUND")
-st.sidebar.write("Pipeline:", "OK" if os.path.exists(PIPE_PATH) else "NOT FOUND")
-st.sidebar.write("Data:", "OK" if os.path.exists(DATA_PATH) else "NOT FOUND")
+page = st.sidebar.radio("Navigation", NAV_ITEMS, key="nav_page")
+
+def _health(value, warn=False):
+    if value:
+        return '<span class="health-ok">OK</span>'
+    if warn:
+        return '<span class="health-warn">WARN</span>'
+    return '<span class="health-bad">OFF</span>'
+
+llm_ok = HAS_LLM and LLM_KEY_OK
+st.sidebar.markdown("**System Health**")
+st.sidebar.markdown(
+    f"""
+    <div class="health-grid">
+        <div class="health-label">SHAP</div><div>{_health(HAS_EXPLAINER)}</div>
+        <div class="health-label">MITRE</div><div>{_health(HAS_MITRE)}</div>
+        <div class="health-label">LLM</div><div>{_health(llm_ok, warn=HAS_LLM)}</div>
+        <div class="health-label">Model</div><div>{_health(os.path.exists(MODEL_PATH))}</div>
+        <div class="health-label">Pipeline</div><div>{_health(os.path.exists(PIPE_PATH))}</div>
+        <div class="health-label">Data</div><div>{_health(os.path.exists(DATA_PATH))}</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+st.sidebar.caption(f"Model version: {MODEL_VERSION.upper()}")
 
 # ── Pipeline guard/autogen ─────────────────────────────────────────
 def ensure_pipeline():
@@ -619,6 +680,30 @@ def render_soc_header(title: str, subtitle: str):
         """,
         unsafe_allow_html=True,
     )
+
+def build_alert_context_from_log(row_scores: dict) -> dict:
+    source_row = int(row_scores.get("source_row", 0))
+    family = str(row_scores.get("zero_day_family") or "")
+    classifier_class = str(row_scores.get("predicted_class", "Unknown"))
+    detection = str(row_scores.get("detection") or ("Zero-Day / " + (family or "Unknown") if row_scores.get("is_zeroday") else classifier_class))
+    return {
+        "alert_id": f"ZD-{source_row:06d}",
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "source_row": source_row,
+        "hybrid_score": float(row_scores.get("hybrid_score", 0)),
+        "ae_score": float(row_scores.get("ae_score", 0)),
+        "max_prob": float(row_scores.get("max_prob", 0)),
+        "predicted_class": detection,
+        "classifier_class": classifier_class,
+        "zero_day_family": family or "Unknown",
+        "is_zeroday": bool(row_scores.get("is_zeroday", False)),
+        "shap_summary": "Batch log context - SHAP explanation not computed for this row.",
+        "mitre_summary": "",
+        "top_features": [],
+        "probs": [],
+        "demo_mode": False,
+        "raw_scores": {k: str(v) for k, v in row_scores.items()},
+    }
 
 def get_llm_analysis(result: dict, comps: dict):
     """Goi LLM triage agent."""
@@ -1037,6 +1122,19 @@ elif page == "[2] Analyze Alert":
                         else:
                             result_df = result_df.copy()
                             result_df.insert(0, "source_row", np.arange(len(result_df)))
+                            family_col = next(
+                                (c for c in ["true_label", "attack_cat", "zero_day_family", "label"] if c in raw_df.columns),
+                                None,
+                            )
+                            if family_col:
+                                result_df["zero_day_family"] = raw_df[family_col].astype(str).reset_index(drop=True)
+                            else:
+                                result_df["zero_day_family"] = ""
+                            result_df["detection"] = np.where(
+                                result_df["is_zeroday"].astype(bool),
+                                "Zero-Day / " + result_df["zero_day_family"].replace("", "Unknown").astype(str),
+                                "Known / " + result_df["predicted_class"].astype(str),
+                            )
                             st.session_state['bulk_result_df'] = result_df
                             st.session_state['bulk_raw_df'] = raw_df.reset_index(drop=True)
 
@@ -1089,7 +1187,7 @@ elif page == "[2] Analyze Alert":
 elif page == "[3] Zero-Day Logs":
     render_soc_header(
         "Zero-Day Logs",
-        "Review zero-day detections from uploaded batch files and inspect full raw feature values for each selected event.",
+        "Zero-day verdicts are shown separately from the known-class classifier so analysts can see both the anomaly decision and the original attack family when available.",
     )
 
     result_df = st.session_state.get('bulk_result_df')
@@ -1101,26 +1199,48 @@ elif page == "[3] Zero-Day Logs":
         logs = result_df.copy()
         if "source_row" not in logs.columns:
             logs.insert(0, "source_row", np.arange(len(logs)))
+        if "zero_day_family" not in logs.columns:
+            family_col = None
+            if isinstance(raw_df, pd.DataFrame):
+                family_col = next(
+                    (c for c in ["true_label", "attack_cat", "zero_day_family", "label"] if c in raw_df.columns),
+                    None,
+                )
+            logs["zero_day_family"] = (
+                raw_df[family_col].astype(str).reset_index(drop=True)
+                if family_col else ""
+            )
+        if "detection" not in logs.columns:
+            family = logs["zero_day_family"].replace("", "Unknown").astype(str)
+            logs["detection"] = np.where(
+                logs["is_zeroday"].astype(bool),
+                "Zero-Day / " + family,
+                "Known / " + logs["predicted_class"].astype(str),
+            )
 
         zd_logs = logs[logs["is_zeroday"].astype(bool)].copy()
         total = len(logs)
         zd_total = len(zd_logs)
         attack_classes = sorted(logs["predicted_class"].astype(str).unique().tolist())
+        families = sorted([x for x in logs["zero_day_family"].astype(str).unique().tolist() if x and x != "nan"])
 
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Batch Rows", f"{total:,}")
         c2.metric("Zero-Day Logs", f"{zd_total:,}")
         c3.metric("Zero-Day Rate", f"{(zd_total / total * 100):.2f}%" if total else "0.00%")
-        c4.metric("Attack Classes", len(attack_classes))
+        c4.metric("Known Classifier Classes", len(attack_classes))
+        c5.metric("ZD Families", len(families))
 
         st.markdown("### Filters")
-        f1, f2, f3 = st.columns([1, 1, 1])
+        f1, f2, f3, f4 = st.columns([1, 1, 1, 1])
         show_only_zd = f1.toggle("Only Zero-Day", value=True)
-        class_options = ["All"] + attack_classes
-        selected_class = f2.selectbox("Attack class", class_options)
-        min_score = f3.slider("Min hybrid score", 0.0, 1.0, 0.0, 0.01)
+        selected_family = f2.selectbox("Zero-day family", ["All"] + families)
+        selected_class = f3.selectbox("Classifier class", ["All"] + attack_classes)
+        min_score = f4.number_input("Min hybrid score", min_value=0.0, value=0.0, step=0.1)
 
         view_df = zd_logs if show_only_zd else logs
+        if selected_family != "All":
+            view_df = view_df[view_df["zero_day_family"].astype(str) == selected_family]
         if selected_class != "All":
             view_df = view_df[view_df["predicted_class"].astype(str) == selected_class]
         view_df = view_df[view_df["hybrid_score"] >= min_score].copy()
@@ -1131,95 +1251,169 @@ elif page == "[3] Zero-Day Logs":
         }, "HIGH" if r.get("is_zeroday", False) else "MEDIUM"), axis=1)
         view_df = view_df.sort_values(["risk", "hybrid_score", "ae_score"], ascending=False)
 
-        st.markdown("### Detection Log")
-        display_cols = [c for c in [
-            "source_row", "predicted_class", "risk", "hybrid_score", "ae_score", "max_prob", "is_zeroday"
-        ] if c in view_df.columns]
-
+        left_col, right_col = st.columns([1.55, 1.0], gap="large")
         selected_source_row = None
-        try:
-            event = st.dataframe(
-                view_df[display_cols],
-                use_container_width=True,
-                hide_index=True,
-                selection_mode="single-row",
-                on_select="rerun",
-            )
-            selected_rows = event.selection.rows if event and hasattr(event, "selection") else []
-            if selected_rows:
-                selected_source_row = int(view_df.iloc[selected_rows[0]]["source_row"])
-        except TypeError:
-            st.dataframe(view_df[display_cols], use_container_width=True, hide_index=True)
 
-        if selected_source_row is None and not view_df.empty:
-            labels = [
-                f"row={int(r.source_row)} | {r.predicted_class} | hybrid={r.hybrid_score:.3f} | ae={r.ae_score:.3f}"
-                for r in view_df.itertuples(index=False)
-            ]
-            selected_label = st.selectbox("Select log row", labels)
-            selected_pos = labels.index(selected_label)
-            selected_source_row = int(view_df.iloc[selected_pos]["source_row"])
-
-        if selected_source_row is not None:
-            row_scores = logs[logs["source_row"] == selected_source_row].iloc[0].to_dict()
-            st.markdown("### Selected Log Detail")
-            d1, d2, d3, d4, d5 = st.columns(5)
-            d1.metric("Source Row", selected_source_row)
-            d2.metric("Class", str(row_scores.get("predicted_class", "Unknown")))
-            d3.metric("Hybrid", f"{float(row_scores.get('hybrid_score', 0)):.3f}")
-            d4.metric("AE / VAE", f"{float(row_scores.get('ae_score', 0)):.3f}")
-            d5.metric("Zero-Day", "YES" if row_scores.get("is_zeroday") else "NO")
-
-            tabs = st.tabs(["Full Features", "Detection Scores", "MITRE Hypothesis"])
-            with tabs[0]:
-                if isinstance(raw_df, pd.DataFrame) and selected_source_row < len(raw_df):
-                    feature_row = raw_df.iloc[selected_source_row]
-                    feature_table = pd.DataFrame({
-                        "Feature": feature_row.index.astype(str),
-                        "Value": feature_row.astype(str).values,
-                    })
-                    search = st.text_input("Search feature", "")
-                    if search:
-                        feature_table = feature_table[
-                            feature_table["Feature"].str.contains(search, case=False, na=False)
-                        ]
-                    st.dataframe(feature_table, use_container_width=True, hide_index=True)
-                else:
-                    st.warning("Khong tim thay raw feature row tu batch upload.")
-
-            with tabs[1]:
-                score_table = pd.DataFrame([
-                    {"Metric": k, "Value": v}
-                    for k, v in row_scores.items()
-                    if k != "source_row"
-                ])
-                st.dataframe(score_table, use_container_width=True, hide_index=True)
-
-            with tabs[2]:
-                if HAS_MITRE:
-                    mapper = MITREMapper()
-                    if bool(row_scores.get("is_zeroday")):
-                        mitre_res = mapper.map_zeroday(float(row_scores.get("ae_score", 0)), [])
-                    else:
-                        class_name = str(row_scores.get("predicted_class", "Generic"))
-                        class_idx = CLASS_NAMES.index(class_name) if class_name in CLASS_NAMES else 0
-                        mitre_res = mapper.map_known_attack(class_idx, class_names=CLASS_NAMES)
-                    techniques = mitre_res.get("techniques") or mitre_res.get("suspected_techniques", [])
-                    st.markdown(
-                        f"**Mode:** `{mitre_res.get('mapping_mode', 'unknown')}` | "
-                        f"**Confidence:** `{mitre_res.get('confidence', 'LOW')}`"
+        with left_col:
+            st.markdown("### Detection Log")
+            if view_df.empty:
+                st.info("Khong co log nao khop filter hien tai.")
+            else:
+                display_cols = [c for c in [
+                    "source_row", "detection", "zero_day_family", "predicted_class",
+                    "risk", "hybrid_score", "ae_score", "max_prob", "is_zeroday"
+                ] if c in view_df.columns]
+                try:
+                    event = st.dataframe(
+                        view_df[display_cols],
+                        use_container_width=True,
+                        hide_index=True,
+                        selection_mode="single-row",
+                        on_select="rerun",
                     )
-                    if techniques:
-                        st.dataframe(pd.DataFrame([{
-                            "Technique": f"{t['id']} - {t['name']}",
-                            "Tactic": t.get("tactic", ""),
-                            "Confidence": t.get("confidence", ""),
-                            "Rationale": t.get("rationale", ""),
-                            "ATT&CK": t.get("url", ""),
-                        } for t in techniques]), use_container_width=True, hide_index=True)
-                    st.caption(mitre_res.get("coverage_note", ""))
-                else:
-                    st.warning("MITRE module chua duoc kich hoat.")
+                    selected_rows = event.selection.rows if event and hasattr(event, "selection") else []
+                    if selected_rows:
+                        selected_source_row = int(view_df.iloc[selected_rows[0]]["source_row"])
+                except TypeError:
+                    st.dataframe(view_df[display_cols], use_container_width=True, hide_index=True)
+
+                if selected_source_row is None:
+                    labels = []
+                    for _, r in view_df.head(500).iterrows():
+                        labels.append(
+                            f"row={int(r['source_row'])} | {r.get('detection', r.get('predicted_class'))} | "
+                            f"hybrid={float(r['hybrid_score']):.3g} | ae={float(r['ae_score']):.3g}"
+                        )
+                    selected_label = st.selectbox("Select log row", labels)
+                    selected_pos = labels.index(selected_label)
+                    selected_source_row = int(view_df.head(500).iloc[selected_pos]["source_row"])
+
+            st.download_button(
+                "Download filtered zero-day log",
+                data=view_df.to_csv(index=False).encode("utf-8"),
+                file_name="zero_day_logs_filtered.csv",
+                mime="text/csv",
+                disabled=view_df.empty,
+            )
+
+        with right_col:
+            st.markdown("### Event Detail")
+            if selected_source_row is None:
+                st.markdown(
+                    """
+                    <div class="soc-panel">
+                        Select a row on the left to inspect classifier output, zero-day verdict, MITRE hypothesis and full features.
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            else:
+                row_scores = logs[logs["source_row"] == selected_source_row].iloc[0].to_dict()
+                row_scores["risk"] = risk_score({
+                    "hybrid_score": row_scores.get("hybrid_score", 0),
+                    "ae_score": row_scores.get("ae_score", 0),
+                    "is_zeroday": bool(row_scores.get("is_zeroday", False)),
+                }, "HIGH" if row_scores.get("is_zeroday") else "MEDIUM")
+                family = str(row_scores.get("zero_day_family") or "Unknown")
+                classifier_class = str(row_scores.get("predicted_class", "Unknown"))
+                detection = str(row_scores.get("detection") or ("Zero-Day / " + family if row_scores.get("is_zeroday") else classifier_class))
+                verdict_badge = "ZERO-DAY" if row_scores.get("is_zeroday") else "KNOWN"
+                badge_class = "soc-pill-red" if row_scores.get("is_zeroday") else "soc-pill-green"
+
+                st.markdown(
+                    f"""
+                    <div class="soc-panel">
+                        <span class="soc-badge {badge_class}">{verdict_badge}</span>
+                        <span class="soc-badge soc-pill-blue">row {selected_source_row}</span>
+                        <div class="soc-detail-title" style="margin-top:12px;">Detection</div>
+                        <div class="soc-detail-value">{detection}</div>
+                        <div class="soc-detail-title">Zero-Day Family / Ground Truth</div>
+                        <div class="soc-detail-value">{family}</div>
+                        <div class="soc-detail-title">Known-Class Classifier Output</div>
+                        <div class="soc-detail-value">{classifier_class}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                d1, d2 = st.columns(2)
+                d1.metric("Hybrid", f"{float(row_scores.get('hybrid_score', 0)):.3g}")
+                d2.metric("AE / VAE", f"{float(row_scores.get('ae_score', 0)):.3g}")
+                d3, d4 = st.columns(2)
+                d3.metric("Max Prob", f"{float(row_scores.get('max_prob', 0)):.3f}")
+                d4.metric("Risk", f"{int(row_scores.get('risk', 0))}/100")
+                if st.button("Ask AI about this log", type="primary", key=f"ask_ai_log_{selected_source_row}"):
+                    alert_context = build_alert_context_from_log(row_scores)
+                    if HAS_MITRE:
+                        mapper = MITREMapper()
+                        if alert_context["is_zeroday"]:
+                            mitre_res = mapper.map_zeroday(alert_context["ae_score"], [])
+                        else:
+                            class_idx = CLASS_NAMES.index(classifier_class) if classifier_class in CLASS_NAMES else 0
+                            mitre_res = mapper.map_known_attack(class_idx, class_names=CLASS_NAMES)
+                        alert_context["mitre_result"] = mitre_res
+                        alert_context["mitre_summary"] = mapper.format_for_llm(mitre_res)
+                    st.session_state["last_alert"] = alert_context
+                    st.session_state["ask_ai_context_source"] = "zero_day_log"
+                    st.session_state["messages"] = []
+                    st.session_state["nav_page"] = "[4] Ask AI"
+                    st.rerun()
+
+                tabs = st.tabs(["Full Features", "Scores", "MITRE"])
+                with tabs[0]:
+                    if isinstance(raw_df, pd.DataFrame) and selected_source_row < len(raw_df):
+                        feature_row = raw_df.iloc[selected_source_row]
+                        feature_table = pd.DataFrame({
+                            "Feature": feature_row.index.astype(str),
+                            "Value": feature_row.astype(str).values,
+                        })
+                        priority = feature_table["Feature"].isin([
+                            "true_label", "attack_cat", "label", "dur", "sbytes", "dbytes",
+                            "sload", "dload", "spkts", "dpkts", "ct_srv_dst", "ct_dst_ltm",
+                            "ct_src_ltm", "state_num", "proto_num", "service_num",
+                        ])
+                        feature_table = pd.concat([feature_table[priority], feature_table[~priority]], ignore_index=True)
+                        search = st.text_input("Search feature", "")
+                        if search:
+                            feature_table = feature_table[
+                                feature_table["Feature"].str.contains(search, case=False, na=False)
+                            ]
+                        st.dataframe(feature_table, use_container_width=True, hide_index=True, height=430)
+                    else:
+                        st.warning("Khong tim thay raw feature row tu batch upload.")
+
+                with tabs[1]:
+                    score_table = pd.DataFrame([
+                        {"Metric": k, "Value": v}
+                        for k, v in row_scores.items()
+                        if k != "source_row"
+                    ])
+                    st.dataframe(score_table, use_container_width=True, hide_index=True, height=360)
+
+                with tabs[2]:
+                    if HAS_MITRE:
+                        mapper = MITREMapper()
+                        if bool(row_scores.get("is_zeroday")):
+                            mitre_res = mapper.map_zeroday(float(row_scores.get("ae_score", 0)), [])
+                        else:
+                            class_idx = CLASS_NAMES.index(classifier_class) if classifier_class in CLASS_NAMES else 0
+                            mitre_res = mapper.map_known_attack(class_idx, class_names=CLASS_NAMES)
+                        techniques = mitre_res.get("techniques") or mitre_res.get("suspected_techniques", [])
+                        st.markdown(
+                            f"**Mode:** `{mitre_res.get('mapping_mode', 'unknown')}` | "
+                            f"**Confidence:** `{mitre_res.get('confidence', 'LOW')}`"
+                        )
+                        if techniques:
+                            st.dataframe(pd.DataFrame([{
+                                "Technique": f"{t['id']} - {t['name']}",
+                                "Tactic": t.get("tactic", ""),
+                                "Confidence": t.get("confidence", ""),
+                                "Rationale": t.get("rationale", ""),
+                                "ATT&CK": t.get("url", ""),
+                            } for t in techniques]), use_container_width=True, hide_index=True)
+                        st.caption(mitre_res.get("coverage_note", ""))
+                    else:
+                        st.warning("MITRE module chua duoc kich hoat.")
 
 # ═════════════════════════════════════════════════════════════════
 # PAGE: Ask AI
@@ -1230,12 +1424,62 @@ elif page == "[4] Ask AI":
         "Ask follow-up questions against the latest alert context, MITRE mapping and model evidence.",
     )
 
+    context_options = []
+    history = st.session_state.get("alert_history", [])
+    for i, item in enumerate(history[-20:]):
+        context_options.append((
+            f"Alert history | {item.get('alert_id')} | {item.get('predicted_class')} | score={float(item.get('hybrid_score', 0)):.3g}",
+            item,
+        ))
+
+    bulk_logs = st.session_state.get("bulk_result_df")
+    if isinstance(bulk_logs, pd.DataFrame) and not bulk_logs.empty:
+        logs_for_ai = bulk_logs.copy()
+        if "source_row" not in logs_for_ai.columns:
+            logs_for_ai.insert(0, "source_row", np.arange(len(logs_for_ai)))
+        logs_for_ai = logs_for_ai.sort_values(["is_zeroday", "hybrid_score", "ae_score"], ascending=False).head(50)
+        for _, row in logs_for_ai.iterrows():
+            row_dict = row.to_dict()
+            context_options.append((
+                f"Zero-day log | row={int(row_dict.get('source_row', 0))} | "
+                f"{row_dict.get('detection', row_dict.get('predicted_class'))} | "
+                f"hybrid={float(row_dict.get('hybrid_score', 0)):.3g}",
+                build_alert_context_from_log(row_dict),
+            ))
+
+    if context_options:
+        labels = [x[0] for x in context_options]
+        current_alert_id = st.session_state.get("last_alert", {}).get("alert_id")
+        default_idx = 0
+        for i, (_, ctx) in enumerate(context_options):
+            if ctx.get("alert_id") == current_alert_id:
+                default_idx = i
+                break
+        selected_context = st.selectbox("AI context", labels, index=default_idx)
+        selected_ctx = context_options[labels.index(selected_context)][1]
+        if st.button("Use selected context", key="use_ai_context"):
+            st.session_state["last_alert"] = selected_ctx
+            st.session_state["messages"] = []
+            st.rerun()
+
     if 'last_alert' not in st.session_state:
-        st.warning("Chua co alert nao. Hay phan tich 1 alert o tab '[2] Analyze Alert' truoc.")
+        st.warning("Chua co alert/log nao. Hay phan tich 1 alert hoac upload CSV batch truoc.")
         st.stop()
 
     last = st.session_state['last_alert']
-    st.caption(f"Context hien tai: Alert #{last['alert_id']} | {last['predicted_class']} | Score: {last['hybrid_score']:.3f}")
+    st.markdown(
+        f"""
+        <div class="soc-panel">
+            <span class="soc-badge soc-pill-blue">Context {last.get('alert_id', 'N/A')}</span>
+            <span class="soc-badge">{last.get('predicted_class', 'Unknown')}</span>
+            <span class="soc-badge">hybrid {float(last.get('hybrid_score', 0)):.3g}</span>
+            <span class="soc-badge">ae {float(last.get('ae_score', 0)):.3g}</span>
+            <div class="soc-detail-title" style="margin-top:10px;">Current AI Context</div>
+            <div class="soc-detail-value">{last.get('zero_day_family', last.get('classifier_class', ''))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # Goi y cau hoi
     st.markdown("**Goi y cau hoi:**")
