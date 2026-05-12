@@ -1,6 +1,21 @@
+# IDS v15.0 — Dependencies
 torch>=2.0
-torchvision
 numpy>=1.24
 pandas>=1.5
 scikit-learn>=1.2
 matplotlib>=3.7
+pyyaml>=6.0
+
+# Optional — dashboard & explainability
+streamlit>=1.30
+shap>=0.43
+python-dotenv>=1.0
+
+# Optional — LLM providers (chọn 1)
+# groq
+# google-generativeai
+# openai
+# anthropic
+
+# Optional — MITRE
+# mitreattack-python

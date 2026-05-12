@@ -13,7 +13,7 @@ CẢI TIẾN SO VỚI v13:
   [TUNE]      AE reconstruction error làm anomaly score thứ 2
 """
 
-import os, sys, glob, json, copy, time, pickle, warnings
+import os, sys, glob, json, copy, time, pickle, warnings, random
 # Fix UnicodeEncodeError khi print duong dan tieng Viet tren Windows terminal
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
     try: sys.stdout.reconfigure(encoding='utf-8')
@@ -79,6 +79,39 @@ class CFG:
     seed        = 42
 
 
+def resolve_paths(cfg):
+    base_dir   = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    local_data = os.path.join(base_dir, 'data')
+    local_ckpt = os.path.join(base_dir, 'checkpoints')
+    local_plot = os.path.join(base_dir, 'plots')
+
+    if getattr(cfg, 'data_dir', None):
+        if (not os.path.exists(cfg.data_dir)) and os.path.exists(local_data):
+            cfg.data_dir = local_data
+        if str(cfg.data_dir).startswith('/kaggle/') and os.path.exists(local_data):
+            cfg.data_dir = local_data
+
+    if getattr(cfg, 'save_dir', None) and str(cfg.save_dir).startswith('/kaggle/'):
+        cfg.save_dir = local_ckpt
+    if getattr(cfg, 'plot_dir', None) and str(cfg.plot_dir).startswith('/kaggle/'):
+        cfg.plot_dir = local_plot
+    return cfg
+
+
+def seed_everything(seed: int):
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    try:
+        torch.use_deterministic_algorithms(True)
+    except Exception:
+        pass
+
+
 def get_config():
     in_nb = False
     try:
@@ -87,7 +120,7 @@ def get_config():
     except NameError:
         pass
     if in_nb:
-        return CFG
+        return resolve_paths(CFG)
     import argparse
     p = argparse.ArgumentParser()
     for k, v in vars(CFG).items():
@@ -100,7 +133,7 @@ def get_config():
     args = p.parse_args()
     for k, v in vars(args).items():
         setattr(CFG, k, v)
-    return CFG
+    return resolve_paths(CFG)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -201,13 +234,29 @@ def normalize_labels(df):
     return df
 
 
-def _get_numeric_features(df):
+def _encode_categorical_features(df, categorical_maps=None):
+    categorical_maps = categorical_maps or {}
+    fitted_maps = {}
+    for cat in ['proto','service','state']:
+        if cat not in df.columns:
+            continue
+        values = df[cat].astype(str).fillna('unk')
+        if cat in categorical_maps:
+            mapping = categorical_maps[cat]
+        else:
+            classes = sorted(values.unique().tolist())
+            if 'unk' not in classes:
+                classes.append('unk')
+            mapping = {v: i for i, v in enumerate(classes)}
+        df[f'{cat}_num'] = values.map(lambda x: mapping.get(x, mapping.get('unk', -1))).astype(np.float32)
+        fitted_maps[cat] = mapping
+    return fitted_maps
+
+
+def _get_numeric_features(df, categorical_maps=None):
     exclude = {'attack_cat','label','label_binary','srcip','dstip',
                'sport','dsport','stime','ltime','id','proto','service','state'}
-    for cat in ['proto','service','state']:
-        if cat in df.columns:
-            le = LabelEncoder()
-            df[f'{cat}_num'] = le.fit_transform(df[cat].astype(str).fillna('unk'))
+    fitted_maps = _encode_categorical_features(df, categorical_maps)
     cols = []
     for c in df.columns:
         if c in exclude: continue
@@ -217,7 +266,7 @@ def _get_numeric_features(df):
             if np.issubdtype(df[c].dtype, np.number):
                 cols.append(c)
         except: pass
-    return cols
+    return cols, fitted_maps
 
 
 def engineer_features(df, feat_cols):
@@ -308,9 +357,10 @@ def prepare_splits(df, known_cats=KNOWN_ATTACK_CATS, zd_cats=ZERO_DAY_ATTACK_CAT
     print(f'\n  Known  {len(act_known)} classes: {len(df_known):,} samples')
     print(f'  ZD     {len(act_zd)} classes: {len(df_zd_full):,} samples')
 
-    feat_cols = _get_numeric_features(df_known)
+    feat_cols, categorical_maps = _get_numeric_features(df_known)
     df_known, feat_cols = engineer_features(df_known, feat_cols)
-    df_zd_full, _       = engineer_features(df_zd_full, _get_numeric_features(df_zd_full))
+    zd_feat_cols, _     = _get_numeric_features(df_zd_full, categorical_maps)
+    df_zd_full, _       = engineer_features(df_zd_full, zd_feat_cols)
     feat_cols = [c for c in feat_cols if c in df_zd_full.columns]
 
     std = df_known[feat_cols].std()
@@ -360,6 +410,7 @@ def prepare_splits(df, known_cats=KNOWN_ATTACK_CATS, zd_cats=ZERO_DAY_ATTACK_CAT
         X_zd=X_zd,    y_zd=y_zd,
         n_features=len(feat_cols), n_classes=n_classes,
         label_encoder=le, scaler=scaler, feat_cols=feat_cols,
+        categorical_maps=categorical_maps,
         known_cats=act_known, zd_cats=act_zd,
     )
 
@@ -551,7 +602,8 @@ class FlowDS(Dataset):
     def __getitem__(self, i): return self.X[i], self.y[i]
 
 
-def make_loaders(splits, batch_size=512, num_workers=2, dos_class_idx=None, dos_over=5.0):
+def make_loaders(splits, batch_size=512, num_workers=2,
+                 dos_class_idx=None, dos_over=5.0, seed=42):
     y_tr    = splits['y_train']
     freq    = np.bincount(y_tr)
     weights = 1.0 / freq[y_tr].astype(np.float32)
@@ -563,7 +615,21 @@ def make_loaders(splits, batch_size=512, num_workers=2, dos_class_idx=None, dos_
     te_ds = FlowDS(splits['X_test'],  splits['y_test'])
 
     sampler = WeightedRandomSampler(torch.FloatTensor(weights), len(y_tr), replacement=True)
-    kw = dict(num_workers=num_workers, pin_memory=torch.cuda.is_available())
+
+    gen = torch.Generator()
+    gen.manual_seed(seed)
+
+    def _seed_worker(worker_id):
+        worker_seed = (seed + worker_id) % (2**32)
+        np.random.seed(worker_seed)
+        random.seed(worker_seed)
+
+    kw = dict(
+        num_workers=num_workers,
+        pin_memory=torch.cuda.is_available(),
+        worker_init_fn=_seed_worker,
+        generator=gen,
+    )
     return {
         'train': DataLoader(tr_ds, batch_size=batch_size, sampler=sampler, **kw),
         'val':   DataLoader(va_ds, batch_size=batch_size, shuffle=False, **kw),
@@ -711,7 +777,7 @@ def _batch_gradbp(model, X, device, batch=512):
     return np.concatenate(scores)
 
 
-def build_centroids(model, X_tr, y_tr, n_clusters=25, device='cpu'):
+def build_centroids(model, X_tr, y_tr, n_clusters=25, device='cpu', seed=42):
     model.eval()
     fvs = []
     with torch.no_grad():
@@ -736,7 +802,7 @@ def build_centroids(model, X_tr, y_tr, n_clusters=25, device='cpu'):
         if k == 1:
             centers.append(cv.mean(0, keepdims=True))
         else:
-            km = MiniBatchKMeans(n_clusters=k, random_state=42, n_init=3, batch_size=2048)
+            km = MiniBatchKMeans(n_clusters=k, random_state=seed, n_init=3, batch_size=2048)
             centers.append(km.fit(cv).cluster_centers_)
     c = np.concatenate(centers)
     print(f'  Centroids: {len(c)}')
@@ -843,9 +909,10 @@ def _attack_probs_batch(model, X, device, batch=512):
 
 
 def plot_soc_decision_space(model, X_kn, y_kn_labels, X_zd, p_thr, re_thr,
-                             device, save_path, label_names, n_sample=5000):
+                             device, save_path, label_names, n_sample=5000,
+                             seed=42):
     model.eval()
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(seed)
 
     def sample(X, y, n):
         idx = rng.choice(len(X), min(n,len(X)), replace=False)
@@ -1043,8 +1110,10 @@ def save_artifacts(model, splits, thresholds, history, centroids, save_dir):
         'known_cats':       splits['known_cats'],
         'zd_cats':          splits['zd_cats'],
         'feat_cols':        splits['feat_cols'],
+        'categorical_maps': splits.get('categorical_maps', {}),
         'thresholds':       thresholds,
         'history':          history,
+        'version':          'v14.0',
     }, pth_path)
     print(f'  Model weights -> {pth_path}')
 
@@ -1057,9 +1126,11 @@ def save_artifacts(model, splits, thresholds, history, centroids, save_dir):
         'known_cats':    splits['known_cats'],
         'zd_cats':       splits['zd_cats'],
         'thresholds':    thresholds,
+        'categorical_maps': splits.get('categorical_maps', {}),
         'centroids_np':  centroids.cpu().numpy(),
         'n_features':    splits['n_features'],
         'n_classes':     splits['n_classes'],
+        'version':       'v14.0',
     }
     with open(pkl_path,'wb') as f:
         pickle.dump(pipeline, f)
@@ -1074,6 +1145,8 @@ def run_full(args):
     print('\n'+'='*70)
     print('IDS v14.0 - Hybrid GradBP+AE  |  UNSW-NB15')
     print('='*70)
+
+    seed_everything(args.seed)
 
     os.makedirs(args.save_dir, exist_ok=True)
     os.makedirs(args.plot_dir, exist_ok=True)
@@ -1094,7 +1167,8 @@ def run_full(args):
     print('\n[3/8] Creating loaders...')
     loaders = make_loaders(splits, batch_size=args.batch_size,
                            num_workers=args.num_workers,
-                           dos_class_idx=dos_idx, dos_over=5.0)
+                           dos_class_idx=dos_idx, dos_over=5.0,
+                           seed=args.seed)
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f'\n[4/8] Building model (device={device})...')
@@ -1115,7 +1189,8 @@ def run_full(args):
 
     print('\n[6/8] Building centroids + calibrating thresholds...')
     centroids  = build_centroids(model, splits['X_train'], splits['y_train'],
-                                  n_clusters=args.n_clusters, device=device)
+                                  n_clusters=args.n_clusters, device=device,
+                                  seed=args.seed)
     thresholds = calibrate(model, splits['X_val'], splits['y_val'],
                            args.target_fpr, device, centroids)
 
@@ -1148,7 +1223,8 @@ def run_full(args):
     plot_training_curve(history, os.path.join(args.plot_dir,'v14_training_curve.png'))
     plot_soc_decision_space(model, splits['X_test'], splits['y_test'],
         splits['X_zd'], p_thr, re_thr, device,
-        os.path.join(args.plot_dir,'v14_decision_space.png'), label_names)
+        os.path.join(args.plot_dir,'v14_decision_space.png'), label_names,
+        seed=args.seed)
 
     per_cls_zd   = zd_res.get('_per_class',{})
     zd_cls_order = sorted(per_cls_zd.keys())
@@ -1161,6 +1237,23 @@ def run_full(args):
 
     best_zd_auc = max((v['auc'] for k,v in zd_res.items()
                        if not k.startswith('_') and 'auc' in v), default=0.)
+
+    results_dir = os.path.abspath(os.path.join(args.save_dir, '..', 'results'))
+    os.makedirs(results_dir, exist_ok=True)
+    summary = {
+        'version': 'v14.0',
+        'known_auc': float(clf_res['auc']),
+        'best_zd_auc': float(best_zd_auc),
+        'best_zd_method': zd_res.get('_best_method'),
+        'n_features': int(splits['n_features']),
+        'n_classes': int(splits['n_classes']),
+        'n_epochs': len(history),
+        'thresholds': thresholds,
+        'known_cats': splits['known_cats'],
+        'zd_cats': splits['zd_cats'],
+    }
+    with open(os.path.join(results_dir, 'ids_v14_results.json'), 'w', encoding='utf-8') as f:
+        json.dump(summary, f, indent=2, default=str)
 
     print(f'\n{"="*70}')
     print('FINAL SUMMARY - IDS v14.0')
@@ -1181,7 +1274,7 @@ def run_demo(args):
     print('\n'+'='*60)
     print('DEMO MODE - Synthetic UNSW-NB15-like data')
     print('='*60)
-    np.random.seed(42); torch.manual_seed(42)
+    seed_everything(getattr(args, 'seed', 42))
     os.makedirs(args.save_dir, exist_ok=True)
     os.makedirs(args.plot_dir, exist_ok=True)
 
@@ -1233,10 +1326,12 @@ def run_demo(args):
     criterion = IDSLoss(n_classes=n_cls, lambda_con=0.3, focal_gamma=2.0,
                         dos_class_idx=dos_idx_demo, dos_weight=5.0, device=device)
     loaders = make_loaders(splits, batch_size=256, num_workers=0,
-                           dos_class_idx=dos_idx_demo)
+                           dos_class_idx=dos_idx_demo,
+                           seed=getattr(args, 'seed', 42))
     model, history = train(model, loaders, args, criterion, device)
 
-    centroids  = build_centroids(model, X_tr, y_tr, 10, device)
+    centroids  = build_centroids(model, X_tr, y_tr, 10, device,
+                                 seed=getattr(args, 'seed', 42))
     thresholds = calibrate(model, X_va, y_va, args.target_fpr, device, centroids)
 
     label_names = [f'Class_{i}' for i in range(n_cls)]
@@ -1256,7 +1351,8 @@ def run_demo(args):
 
     plot_training_curve(history, os.path.join(args.plot_dir,'v14_training_curve.png'))
     plot_soc_decision_space(model,X_te,y_te,X_zd,0.5,re_thr_demo,device,
-                             os.path.join(args.plot_dir,'v14_decision_space.png'),label_names)
+                             os.path.join(args.plot_dir,'v14_decision_space.png'),label_names,
+                             seed=getattr(args, 'seed', 42))
     per_cls_zd   = zd_res.get('_per_class',{})
     zd_cls_order = sorted(per_cls_zd.keys())
     plot_per_class_proper(label_names, y_te, clf_res['preds'], per_cls_zd, zd_cls_order,
