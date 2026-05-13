@@ -1,14 +1,14 @@
 # Zero-Day Detection AutoEncoder IDS
 
-Hệ thống phát hiện xâm nhập trên UNSW-NB15, gồm mô hình IDS, phát hiện bất thường/zero-day, dashboard SOC, SHAP explainability, MITRE mapping và LLM triage.
+Hệ thống phát hiện xâm nhập dựa trên UNSW-NB15, gồm mô hình IDS hybrid, phát hiện bất thường/zero-day, dashboard SOC, SHAP explainability, MITRE ATT&CK mapping và LLM triage.
 
 ## Trạng Thái Hiện Tại
 
 - `v14` là bản vận hành mặc định vì repo hiện có sẵn checkpoint:
   - `checkpoints/ids_v14_model.pth`
   - `checkpoints/ids_v14_pipeline.pkl`
-- `v15` là bản thử nghiệm/nâng cấp với VAE, Attention và OOD ensemble. Muốn dùng v15 cần train/export artifact v15 trước.
-- Dashboard có thể chọn version bằng biến môi trường `IDS_MODEL_VERSION`.
+- `v15` là bản thử nghiệm/nâng cấp với VAE, Attention Gate và OOD ensemble. Muốn dùng v15 cần train/export artifact v15 trước.
+- Dashboard chọn version bằng biến môi trường `IDS_MODEL_VERSION`.
 
 ## Cấu Trúc Chính
 
@@ -18,11 +18,14 @@ src/
   ids_v15_unswnb15.py      # pipeline train/evaluate/export v15
   explainer.py             # SHAP explainer
   mitre_mapper.py          # UNSW class -> MITRE ATT&CK heuristic mapping
+  log_normalizer.py        # normalize CSV log thực tế về schema flow gần UNSW
   llm_agent.py             # SOC triage LLM wrapper
 dashboard/
   app.py                   # Streamlit SOC dashboard
 configs/
   config_default.yaml      # config v15
+tests/
+  test_smoke.py            # unittest smoke tests cho artifact, MITRE, normalizer
 scripts/
   train.sh                 # train v14
   train_v15.sh             # train v15
@@ -38,6 +41,15 @@ pip install -r requirements.txt
 ```
 
 Nếu chạy v15 với YAML config, cần `pyyaml`. File `requirements.txt` đã khai báo dependency này.
+
+## Kiểm Tra Nhanh
+
+```bash
+python -m compileall src dashboard export_model.py patch_checkpoint.py
+python -m unittest discover -s tests
+```
+
+Smoke tests sẽ skip phần load artifact nếu checkpoint/pipeline không tồn tại trong máy hiện tại.
 
 ## Chạy Dashboard
 
@@ -63,7 +75,7 @@ $env:IDS_MODEL_VERSION="v14"
 streamlit run dashboard/app.py
 ```
 
-Các biến môi trường hỗ trợ:
+Biến môi trường hỗ trợ:
 
 - `IDS_MODEL_VERSION`: `v14` hoặc `v15`
 - `IDS_MODEL_PATH`: đường dẫn file `.pth`
@@ -86,11 +98,11 @@ Train v15:
 python src/ids_v15_unswnb15.py --data_dir data/ --save_dir checkpoints/ --plot_dir plots/
 ```
 
-Sau khi train, pipeline sẽ lưu thêm metadata phục vụ inference thực tế, gồm feature list, scaler, label encoder, categorical mappings, thresholds và version.
+Sau khi train, pipeline lưu metadata phục vụ inference thực tế: feature list, scaler, label encoder, categorical mappings, thresholds và version.
 
 ## Ghi Chú Vận Hành
 
 - Không commit `.env`, `data/`, `checkpoints/` hoặc file `.pyc`.
-- Dashboard sẽ vào demo mode nếu thiếu model hoặc pipeline.
+- Dashboard vào demo mode nếu thiếu model hoặc pipeline.
 - MITRE mapping hiện là heuristic, phù hợp demo/triage sơ bộ, chưa thay thế phân tích SOC thủ công.
 - LLM chỉ dùng để hỗ trợ diễn giải; quyết định xử lý incident vẫn cần analyst xác nhận.

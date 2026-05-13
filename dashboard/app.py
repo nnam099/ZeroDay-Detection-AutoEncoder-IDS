@@ -844,7 +844,7 @@ def display_result(result: dict, llm: dict):
             df_shap["SHAP Value"] = df_shap["SHAP Value"].round(4)
             df_shap["Actual Value"] = df_shap["Actual Value"].round(4)
             df_shap["Direction"] = df_shap["SHAP Value"].apply(lambda x: "Tang nguy co" if x > 0 else "Giam nguy co")
-            st.dataframe(df_shap, use_container_width=True)
+            st.dataframe(df_shap, width="stretch")
             st.bar_chart(df_shap.set_index("Feature")["SHAP Value"])
         else:
             st.write(result.get('shap_summary', 'SHAP chua chay'))
@@ -928,7 +928,7 @@ def display_result(result: dict, llm: dict):
             "Probability": [round(p, 4) for p in result['probs']]
         })
         st.markdown("**Class Probabilities**")
-        st.dataframe(prob_df.sort_values("Probability", ascending=False), use_container_width=True, hide_index=True)
+        st.dataframe(prob_df.sort_values("Probability", ascending=False), width="stretch", hide_index=True)
         st.bar_chart(prob_df.set_index("Class"))
 
         feats = result.get('top_features', [])
@@ -937,7 +937,7 @@ def display_result(result: dict, llm: dict):
             df_shap["SHAP Value"] = df_shap["SHAP Value"].round(4)
             df_shap["Actual Value"] = df_shap["Actual Value"].round(4)
             df_shap["Direction"] = df_shap["SHAP Value"].apply(lambda x: "Tang nguy co" if x > 0 else "Giam nguy co")
-            st.dataframe(df_shap, use_container_width=True, hide_index=True)
+            st.dataframe(df_shap, width="stretch", hide_index=True)
             st.bar_chart(df_shap.set_index("Feature")["SHAP Value"])
         else:
             st.write(result.get('shap_summary', 'SHAP chua chay'))
@@ -960,14 +960,14 @@ def display_result(result: dict, llm: dict):
                     "Evidence": ", ".join(t.get('evidence', [])),
                     "ATT&CK": t.get('url', f"https://attack.mitre.org/techniques/{t['id']}/"),
                 } for t in techniques])
-                st.dataframe(mitre_df, use_container_width=True, hide_index=True)
+                st.dataframe(mitre_df, width="stretch", hide_index=True)
                 checks = []
                 for t in techniques:
                     for action in t.get("response_actions", []):
                         checks.append({"Technique": t["id"], "Check": action})
                 if checks:
                     st.markdown("**Recommended MITRE-driven checks**")
-                    st.dataframe(pd.DataFrame(checks), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(checks), width="stretch", hide_index=True)
             st.caption(mitre.get("coverage_note", ""))
         else:
             st.write(result.get('mitre_summary', 'MITRE chua chay'))
@@ -1047,7 +1047,7 @@ if page == "[1] Dashboard":
             "Zero-Day"    : "YES" if a['is_zeroday'] else "NO",
         } for a in history])
         hist_df = hist_df.sort_values(["Risk", "Time"], ascending=[False, False])
-        st.dataframe(hist_df, use_container_width=True, hide_index=True)
+        st.dataframe(hist_df, width="stretch", hide_index=True)
 
         left, right = st.columns([1.1, 1])
         with left:
@@ -1192,7 +1192,7 @@ elif page == "[2] Analyze Alert":
                 )
                 st.dataframe(
                     raw_df.head(preview_rows),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                     height=560,
                 )
@@ -1297,7 +1297,7 @@ elif page == "[2] Analyze Alert":
                 )
                 st.dataframe(
                     result_df.head(rows_to_show),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                     height=620,
                 )
@@ -1313,7 +1313,7 @@ elif page == "[2] Analyze Alert":
                     .rename_axis("Label")
                     .reset_index(name="Count")
                 )
-                st.dataframe(verdict_counts, use_container_width=True, hide_index=True)
+                st.dataframe(verdict_counts, width="stretch", hide_index=True)
                 if "ground_truth" in result_df.columns and result_df["ground_truth"].astype(str).str.len().any():
                     gt_counts = (
                         result_df["ground_truth"]
@@ -1325,7 +1325,7 @@ elif page == "[2] Analyze Alert":
                     comparable = result_df["correct_vs_ground_truth"].dropna()
                     gt_acc = float(comparable.mean()) if len(comparable) else 0.0
                     st.metric("Accuracy vs CSV Label", f"{gt_acc * 100:.2f}%")
-                    st.dataframe(gt_counts, use_container_width=True, hide_index=True)
+                    st.dataframe(gt_counts, width="stretch", hide_index=True)
                 score_summary = st.session_state.get('bulk_score_summary')
                 if isinstance(score_summary, dict):
                     with st.expander("Kiem tra score va nguong phat hien", expanded=False):
@@ -1425,7 +1425,7 @@ elif page == "[3] Zero-Day Logs":
                 try:
                     event = st.dataframe(
                         view_df[display_cols],
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                         selection_mode="single-row",
                         on_select="rerun",
@@ -1434,7 +1434,7 @@ elif page == "[3] Zero-Day Logs":
                     if selected_rows:
                         selected_source_row = int(view_df.iloc[selected_rows[0]]["source_row"])
                 except TypeError:
-                    st.dataframe(view_df[display_cols], use_container_width=True, hide_index=True)
+                    st.dataframe(view_df[display_cols], width="stretch", hide_index=True)
 
                 if selected_source_row is None:
                     labels = []
@@ -1534,7 +1534,7 @@ elif page == "[3] Zero-Day Logs":
                             feature_table = feature_table[
                                 feature_table["Feature"].str.contains(search, case=False, na=False)
                             ]
-                        st.dataframe(feature_table, use_container_width=True, hide_index=True, height=430)
+                        st.dataframe(feature_table, width="stretch", hide_index=True, height=430)
                     else:
                         st.warning("Khong tim thay raw feature row tu batch upload.")
 
@@ -1544,7 +1544,7 @@ elif page == "[3] Zero-Day Logs":
                         for k, v in row_scores.items()
                         if k != "source_row"
                     ])
-                    st.dataframe(score_table, use_container_width=True, hide_index=True, height=360)
+                    st.dataframe(score_table, width="stretch", hide_index=True, height=360)
 
                 with tabs[2]:
                     if HAS_MITRE:
@@ -1566,7 +1566,7 @@ elif page == "[3] Zero-Day Logs":
                                 "Confidence": t.get("confidence", ""),
                                 "Rationale": t.get("rationale", ""),
                                 "ATT&CK": t.get("url", ""),
-                            } for t in techniques]), use_container_width=True, hide_index=True)
+                            } for t in techniques]), width="stretch", hide_index=True)
                         st.caption(mitre_res.get("coverage_note", ""))
                     else:
                         st.warning("MITRE module chua duoc kich hoat.")
