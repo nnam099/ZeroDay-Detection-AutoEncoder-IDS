@@ -16,12 +16,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq").strip().lower()
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "none").strip().lower()
 _LLM_CALL = None
 _LLM_INIT_ERROR = None
 
 
 def _build_client():
+    if LLM_PROVIDER in {"", "none", "off", "disabled"}:
+        raise ValueError("LLM_PROVIDER is disabled")
+
     if LLM_PROVIDER == "groq":
         from groq import Groq
 
@@ -143,7 +146,7 @@ class SOCTriageAgent:
 
         ood_ens_str = f"{ood_ens_score:.4f}" if isinstance(ood_ens_score, float) else str(ood_ens_score)
         knn_str = f"{knn_score:.4f}" if isinstance(knn_score, float) else str(knn_score)
-        zeroday_str = "CO" if alert_data.get("is_zeroday") else "KHONG"
+        ood_candidate_str = "CO" if alert_data.get("is_zeroday") else "KHONG"
 
         prompt = f"""NHIEM VU: Phan tich alert bao mat va chi tra ve mot JSON object hop le.
 
@@ -155,7 +158,7 @@ VAE Recon Error : {vae_score:.4f}
 OOD Ensemble    : {ood_ens_str}
 KNN Distance    : {knn_str}
 Phan loai       : {alert_data.get('predicted_class', 'Unknown')} (do tin cay: {alert_data.get('max_prob', 0):.1%})
-Zero-Day        : {zeroday_str}
+OOD Candidate   : {ood_candidate_str}
 SHAP            : {alert_data.get('shap_summary', 'Chua co')[:300]}
 Attention Gate  : {attn_summary[:200]}
 MITRE           : {alert_data.get('mitre_summary', 'Chua co')[:200]}

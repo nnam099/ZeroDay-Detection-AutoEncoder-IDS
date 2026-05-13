@@ -282,7 +282,7 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertTrue(bool(decision))
         self.assertEqual(rule, "hybrid_calibrated")
 
-        self.assertEqual(traffic_verdict(True, "Normal"), "Zero-Day")
+        self.assertEqual(traffic_verdict(True, "Normal"), "Zero-Day Candidate")
         self.assertEqual(traffic_verdict(False, "Normal"), "Normal")
         self.assertEqual(traffic_verdict(False, "DoS"), "Known-Attack")
         self.assertEqual(ground_truth_verdict("benign"), "Normal")
@@ -362,7 +362,7 @@ class CoreSmokeTests(unittest.TestCase):
                     "hybrid_score": 0.7,
                     "ae_score": 0.6,
                     "max_prob": 0.4,
-                    "predicted_class": "Zero-Day",
+                    "predicted_class": "Zero-Day Candidate",
                     "is_zeroday": True,
                 }
             )

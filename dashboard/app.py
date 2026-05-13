@@ -299,7 +299,7 @@ def _build_categorical_maps_from_sample() -> dict:
         return {}
 
 # ── Sidebar navigation ────────────────────────────────────────────
-NAV_ITEMS = ["[1] Dashboard", "[2] Analyze Alert", "[3] Zero-Day Logs", "[4] Ask AI", "[5] Setup Guide"]
+NAV_ITEMS = ["[1] Dashboard", "[2] Analyze Alert", "[3] OOD Candidate Logs", "[4] Ask AI", "[5] Setup Guide"]
 if "nav_page" not in st.session_state:
     st.session_state["nav_page"] = NAV_ITEMS[0]
 
@@ -820,7 +820,7 @@ def get_llm_analysis(result: dict, comps: dict):
     if 'agent' not in comps:
         return {
             "severity"           : "HIGH" if result['hybrid_score'] > 0.6 else "MEDIUM",
-            "verdict"            : f"{'Zero-Day' if result['is_zeroday'] else result['predicted_class']} detected - hybrid score: {result['hybrid_score']:.3f}",
+            "verdict"            : f"{'Zero-Day Candidate' if result['is_zeroday'] else result['predicted_class']} detected - hybrid score: {result['hybrid_score']:.3f}",
             "attack_summary"     : f"AE reconstruction error cao ({result['ae_score']:.3f}) cho thay traffic bat thuong. Can kiem tra thu cong.",
             "recommended_actions": ["Kiem tra nguon IP", "Xem xet block traffic", "Escalate len Tier 2"],
             "false_positive_risk": "MEDIUM",
@@ -847,7 +847,7 @@ def _display_result_legacy_unused(result: dict, llm: dict):
     sev = llm.get('severity', 'HIGH')
 
     if result.get('demo_mode'):
-        st.info("DEMO MODE - Du lieu gia lap. Cai model that de co ket qua chinh xac.")
+        st.info("DEMO SANDBOX - Du lieu gia lap, khong dung de ket luan an ninh.")
 
     st.subheader(f"Alert #{result['alert_id']} | {sev_label.get(sev, sev)} | {result['timestamp']}")
     st.info(f"**Verdict:** {llm.get('verdict', '')}")
@@ -926,7 +926,7 @@ def display_result(result: dict, llm: dict):
     risk = risk_score(result, sev)
 
     if result.get('demo_mode'):
-        st.info("DEMO MODE - Du lieu gia lap. Cai model that de co ket qua chinh xac.")
+        st.info("DEMO SANDBOX - Du lieu gia lap, khong dung de ket luan an ninh.")
 
     st.markdown(
         f"""
@@ -1057,7 +1057,7 @@ if page == "[1] Dashboard":
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Alert Queue", len(history))
     c2.metric("Critical / High", hi)
-    c3.metric("Zero-Day Hypotheses", zd)
+    c3.metric("OOD Hypotheses", zd)
     c4.metric("Average Risk", f"{avg_risk}/100")
     c5.metric("Model Mode", "DEMO" if DEMO_MODE else MODEL_VERSION.upper())
     threshold_profile = PIPELINE_META.get("threshold_profile") if isinstance(PIPELINE_META, dict) else None
@@ -1087,7 +1087,7 @@ if page == "[1] Dashboard":
             "Class"       : a['predicted_class'],
             "Hybrid Score": round(a['hybrid_score'], 3),
             "AE Score"    : round(a.get('ae_score', 0), 3),
-            "Zero-Day"    : "YES" if a['is_zeroday'] else "NO",
+            "OOD Candidate": "YES" if a['is_zeroday'] else "NO",
         } for a in history])
         hist_df = hist_df.sort_values(["Risk", "Time"], ascending=[False, False])
         st.dataframe(hist_df, width="stretch", hide_index=True)
@@ -1098,9 +1098,9 @@ if page == "[1] Dashboard":
             sev_counts = hist_df["Severity"].value_counts().rename_axis("Severity").reset_index(name="Count")
             st.bar_chart(sev_counts.set_index("Severity"))
         with right:
-            st.markdown("### Zero-Day Mix")
-            zd_counts = hist_df["Zero-Day"].value_counts().rename_axis("Zero-Day").reset_index(name="Count")
-            st.bar_chart(zd_counts.set_index("Zero-Day"))
+            st.markdown("### OOD Candidate Mix")
+            zd_counts = hist_df["OOD Candidate"].value_counts().rename_axis("OOD Candidate").reset_index(name="Count")
+            st.bar_chart(zd_counts.set_index("OOD Candidate"))
     else:
         st.markdown(
             """
@@ -1124,7 +1124,7 @@ elif page == "[2] Analyze Alert":
     )
 
     if DEMO_MODE:
-        st.warning("DEMO MODE: Model chua duoc load. Dang dung du lieu gia lap.")
+        st.warning("DEMO SANDBOX: Model chua duoc load. Ket qua gia lap khong duoc dua vao analyst queue.")
 
     bg_data = None
     comps   = {}
@@ -1163,14 +1163,14 @@ elif page == "[2] Analyze Alert":
 
                 display_result(result, llm)
 
-                # Luu vao history
-                if 'alert_history' not in st.session_state:
-                    st.session_state['alert_history'] = []
-                result['llm_severity'] = llm.get('severity', 'N/A')
-                st.session_state['alert_history'].append(result)
+                if not result.get("demo_mode"):
+                    if 'alert_history' not in st.session_state:
+                        st.session_state['alert_history'] = []
+                    result['llm_severity'] = llm.get('severity', 'N/A')
+                    st.session_state['alert_history'].append(result)
 
     elif mode == "Nhap thu cong (demo)":
-        st.info("Nhap gia tri hybrid score va AE score de xem LLM phan tich.")
+        st.info("Score sandbox chi de minh hoa rule; khong luu vao analyst queue.")
         col1, col2 = st.columns(2)
         ae_val  = col1.slider("AE Reconstruction Error", 0.0, 1.0, 0.75, 0.01)
         max_p   = col2.slider("Classifier Max Probability", 0.0, 1.0, 0.45, 0.01)
@@ -1383,12 +1383,12 @@ elif page == "[2] Analyze Alert":
 
                 total = len(result_df)
                 zd_cnt = int(result_df['is_zeroday'].sum())
-                st.metric("Zero-Day detected", zd_cnt)
-                st.metric("Zero-Day rate", f"{(zd_cnt/total*100):.2f}%")
+                st.metric("OOD candidates", zd_cnt)
+                st.metric("OOD candidate rate", f"{(zd_cnt/total*100):.2f}%")
                 verdict_counts = (
                     result_df["detection"]
                     .value_counts()
-                    .reindex(["Normal", "Known-Attack", "Zero-Day"], fill_value=0)
+                    .reindex(["Normal", "Known-Attack", "Zero-Day Candidate"], fill_value=0)
                     .rename_axis("Label")
                     .reset_index(name="Count")
                 )
@@ -1418,12 +1418,12 @@ elif page == "[2] Analyze Alert":
                 )
 
 # ═════════════════════════════════════════════════════════════════
-# PAGE: Zero-Day Logs
+# PAGE: OOD Candidate Logs
 # ═════════════════════════════════════════════════════════════════
-elif page == "[3] Zero-Day Logs":
+elif page == "[3] OOD Candidate Logs":
     render_soc_header(
-        "Zero-Day Logs",
-        "Zero-day verdicts use a single Zero-Day label. Dataset family values are kept only as optional reference metadata.",
+        "OOD Candidate Logs",
+        "OOD/zero-day candidates are hypotheses for analyst review. Dataset family values are kept only as optional reference metadata.",
     )
 
     result_df = st.session_state.get('bulk_result_df')
@@ -1465,13 +1465,13 @@ elif page == "[3] Zero-Day Logs":
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Batch Rows", f"{total:,}")
-        c2.metric("Zero-Day Logs", f"{zd_total:,}")
-        c3.metric("Zero-Day Rate", f"{(zd_total / total * 100):.2f}%" if total else "0.00%")
+        c2.metric("OOD Candidate Logs", f"{zd_total:,}")
+        c3.metric("OOD Candidate Rate", f"{(zd_total / total * 100):.2f}%" if total else "0.00%")
         c4.metric("Verdict Labels", len(verdicts))
 
         st.markdown("### Filters")
         f1, f2, f3, f4 = st.columns([1, 1, 1, 1])
-        show_only_zd = f1.toggle("Only Zero-Day", value=True)
+        show_only_zd = f1.toggle("Only OOD candidates", value=True)
         selected_verdict = f2.selectbox("Verdict", ["All"] + verdicts)
         selected_class = f3.selectbox("Classifier class", ["All"] + classifier_classes)
         min_score = f4.number_input("Min hybrid score", min_value=0.0, value=0.0, step=0.1)
@@ -1527,9 +1527,9 @@ elif page == "[3] Zero-Day Logs":
                     selected_source_row = int(view_df.head(500).iloc[selected_pos]["source_row"])
 
             st.download_button(
-                "Download filtered zero-day log",
+                "Download filtered OOD candidate log",
                 data=view_df.to_csv(index=False).encode("utf-8"),
-                file_name="zero_day_logs_filtered.csv",
+                file_name="ood_candidate_logs_filtered.csv",
                 mime="text/csv",
                 disabled=view_df.empty,
             )
@@ -1540,7 +1540,7 @@ elif page == "[3] Zero-Day Logs":
                 st.markdown(
                     """
                     <div class="soc-panel">
-                        Select a row on the left to inspect classifier output, zero-day verdict, MITRE hypothesis and full features.
+                        Select a row on the left to inspect classifier output, OOD hypothesis, MITRE hypothesis and full features.
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -1554,7 +1554,7 @@ elif page == "[3] Zero-Day Logs":
                 }, "HIGH" if row_scores.get("is_zeroday") else "MEDIUM")
                 classifier_class = str(row_scores.get("classifier_class", row_scores.get("predicted_class", "Unknown")))
                 detection = str(row_scores.get("detection") or _traffic_verdict(row_scores.get("is_zeroday"), classifier_class))
-                verdict_badge = "ZERO-DAY" if row_scores.get("is_zeroday") else "KNOWN"
+                verdict_badge = "OOD CANDIDATE" if row_scores.get("is_zeroday") else "KNOWN"
                 badge_class = "soc-pill-red" if row_scores.get("is_zeroday") else "soc-pill-green"
 
                 st.markdown(
@@ -1818,10 +1818,10 @@ print("Da luu model va pipeline!")
     """, language="python")
 
     st.markdown("### Buoc 3: Cau hinh API Key cho LLM")
-    st.markdown("1. Dang ky API Key tai nha cung cap ban chon (Vi du: https://console.groq.com/keys)")
-    st.markdown("2. Mo file `src/llm_agent.py` va chon `LLM_PROVIDER`")
+    st.markdown("1. LLM mac dinh tat bang `LLM_PROVIDER=none`; day chi la tro ly phan tich, khong phai engine quyet dinh verdict.")
+    st.markdown("2. Neu can LLM, dang ky API Key tai nha cung cap ban chon va set provider trong `.env`.")
     st.markdown("3. Tao file `.env` trong thu muc goc va them key tuong ung:")
-    st.code("GROQ_API_KEY=gsk_...\n# GEMINI_API_KEY=AIzaSy...\n# OPENAI_API_KEY=sk-...", language="bash")
+    st.code("LLM_PROVIDER=groq\nGROQ_API_KEY=gsk_...\n# GEMINI_API_KEY=AIzaSy...\n# OPENAI_API_KEY=sk-...", language="bash")
 
     st.markdown("**Ghi chu:** Neu thieu pipeline, app se co gang tao tu data/ khi khoi dong.")
 

@@ -203,7 +203,7 @@ def summarize_scores(scores: pd.DataFrame, raw_df: pd.DataFrame | None = None, l
             summary["normal_false_positive_count"] = int(normal_zd.sum())
             summary["normal_count"] = int(normal_mask.sum())
         if bool(attack_mask.any()):
-            attack_known = scores.loc[attack_mask.values, "predicted_class"].isin(["Known-Attack", "Zero-Day"])
+            attack_known = scores.loc[attack_mask.values, "predicted_class"].isin(["Known-Attack", "Zero-Day Candidate"])
             summary["attack_detection_rate"] = round(float(attack_known.mean()), 6)
             summary["attack_count"] = int(attack_mask.sum())
 

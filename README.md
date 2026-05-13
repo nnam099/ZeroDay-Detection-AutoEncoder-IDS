@@ -21,7 +21,7 @@ Main flow:
 ## Current Status
 
 - v14 is the operational default because local artifacts exist in `checkpoints/`.
-- `scripts/smoke_check.py` passes locally with 15 tests.
+- `scripts/smoke_check.py` passes locally with 18 tests.
 - Smoke coverage includes artifact contract validation, threshold metadata validation, artifact manifest hashing, duplicate feature-name rejection, environment readiness checks, export config handling, checkpoint metadata patch logic, CSV input guardrails, CSV normalization quality checks, MITRE mapping, LLM import/fallback behavior and v14 artifact loading.
 - `llm_agent.py` lazy-loads provider clients, so importing dashboard code does not require an API key.
 - A Windows GitHub Actions smoke workflow is available at `.github/workflows/smoke.yml`.
@@ -154,7 +154,7 @@ Important environment variables:
 | `IDS_PIPELINE_PATH` | Path to pipeline `.pkl` |
 | `IDS_DATA_DIR` | Dataset directory |
 | `IDS_SAMPLE_DATA_PATH` | Sample CSV path for dashboard |
-| `LLM_PROVIDER` | `groq`, `gemini`, `openai` or `anthropic` |
+| `LLM_PROVIDER` | `none`, `groq`, `gemini`, `openai` or `anthropic` |
 
 If model or pipeline artifacts are missing, the dashboard falls back to demo mode.
 
@@ -242,7 +242,7 @@ python scripts/smoke_check.py
 ## Evaluate and Calibrate CSV Drift
 
 Use the CSV evaluator before retraining when a new dataset produces too many
-zero-day hypotheses. It runs the saved model/pipeline outside Streamlit, writes a
+OOD/zero-day candidate hypotheses. It runs the saved model/pipeline outside Streamlit, writes a
 score distribution report and can calibrate a local threshold profile.
 
 ```powershell
@@ -262,7 +262,7 @@ python scripts/evaluate_csv.py "path\to\Tuesday-WorkingHours.pcap_ISCX.csv" `
 
 The dashboard automatically loads `checkpoints/local_thresholds.json` when it is
 present. Override with `IDS_THRESHOLD_PROFILE` if you want to test another
-profile. Local profiles use vote-based zero-day decisions by default, so a row
+profile. Local profiles use vote-based OOD candidate decisions by default, so a row
 must cross multiple calibrated signals instead of only the hybrid score.
 
 Run the full local quality gate:

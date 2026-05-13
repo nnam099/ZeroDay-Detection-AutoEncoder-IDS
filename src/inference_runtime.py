@@ -31,7 +31,7 @@ def zero_day_decision(
 
 def traffic_verdict(is_zeroday, classifier_class) -> str:
     if bool(is_zeroday):
-        return "Zero-Day"
+        return "Zero-Day Candidate"
     if str(classifier_class).strip().lower() == "normal":
         return "Normal"
     return "Known-Attack"
