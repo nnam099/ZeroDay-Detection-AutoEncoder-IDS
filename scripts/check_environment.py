@@ -8,6 +8,11 @@ from pathlib import Path
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from artifact_manifest import verify_manifest  # noqa: E402
 
 
 def module_available(name: str) -> bool:
@@ -28,7 +33,7 @@ def collect_environment() -> dict:
     provider = os.getenv("LLM_PROVIDER", "").strip().lower()
     key_name = provider_keys.get(provider)
 
-    return {
+    env = {
         "python": sys.version.split()[0],
         "root": str(ROOT_DIR),
         "packages": {name: module_available(name) for name in packages},
@@ -48,6 +53,66 @@ def collect_environment() -> dict:
             "key_env": key_name,
             "key_present": bool(os.getenv(key_name, "").strip()) if key_name else False,
         },
+    }
+    manifest_path = ROOT_DIR / "results" / "artifact_manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        env["artifact_manifest"] = verify_manifest(ROOT_DIR, manifest)
+    else:
+        env["artifact_manifest"] = {"ok": None, "errors": [], "warnings": ["results/artifact_manifest.json is missing"]}
+    env["readiness"] = assess_readiness(env)
+    return env
+
+
+def assess_readiness(env: dict) -> dict:
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    packages = env.get("packages", {})
+    for package in ["torch", "numpy", "pandas", "sklearn", "matplotlib", "dotenv"]:
+        if not packages.get(package):
+            blockers.append(f"Missing required package: {package}")
+
+    artifacts = env.get("artifacts", {})
+    if not (artifacts.get("v14_model") and artifacts.get("v14_pipeline")):
+        warnings.append("v14 artifacts are missing; dashboard will fall back to demo mode.")
+    if not (artifacts.get("v15_model") and artifacts.get("v15_pipeline")):
+        warnings.append("v15 artifacts are missing; keep IDS_MODEL_VERSION=v14 unless v15 is trained.")
+
+    data = env.get("data", {})
+    if not data.get("data_dir"):
+        blockers.append("data/ directory is missing.")
+    elif not (data.get("training_csv") and data.get("testing_csv")):
+        warnings.append("UNSW train/test CSV files are incomplete; training workflows may fail.")
+
+    if not packages.get("streamlit"):
+        warnings.append("streamlit is missing; dashboard cannot run until installed.")
+    if not packages.get("shap"):
+        warnings.append("shap is missing; dashboard explainability will be disabled.")
+
+    llm = env.get("llm", {})
+    if llm.get("provider") and not llm.get("key_present"):
+        warnings.append(f"LLM provider is set to {llm['provider']} but its API key is missing.")
+
+    manifest = env.get("artifact_manifest", {})
+    if manifest.get("ok") is False:
+        blockers.extend(manifest.get("errors", []))
+    elif manifest.get("ok") is None:
+        warnings.extend(manifest.get("warnings", []))
+    else:
+        warnings.extend(manifest.get("warnings", []))
+
+    if blockers:
+        status = "BLOCKED"
+    elif warnings:
+        status = "WARN"
+    else:
+        status = "READY"
+
+    return {
+        "status": status,
+        "blockers": blockers,
+        "warnings": warnings,
     }
 
 

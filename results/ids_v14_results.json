@@ -4,14 +4,17 @@
   "updated_at": "2026-05-13",
   "verification": {
     "command": "python scripts/smoke_check.py",
-    "tests": 12,
+    "tests": 15,
     "result": "pass",
     "checks": [
       "Python compile for src, dashboard, scripts, export helpers and tests",
       "artifact contract validator accepts/rejects expected metadata",
       "artifact contract validator rejects duplicate feature names",
+      "artifact contract validator rejects invalid threshold metadata",
       "export helper builds training config from CLI overrides",
       "environment check reports LLM key presence without exposing secret values",
+      "artifact manifest detects SHA-256 drift for changed artifact files",
+      "uploaded CSV input guard rejects empty or oversized dashboard inputs",
       "checkpoint patch helper infers hidden dimensions from checkpoint state",
       "real-world CSV normalizer maps common firewall flow fields",
       "inference verdict, risk and CSV-quality helpers return expected decisions",

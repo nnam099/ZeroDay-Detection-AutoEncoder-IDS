@@ -1,0 +1,20 @@
+{
+  "artifacts": {
+    "checkpoints/ids_v14_model.pth": {
+      "exists": true,
+      "size_bytes": 2302612,
+      "sha256": "8ebd4ed3f0be02713acd3919215520180b17c769a793d198afc81ee00e8c3ea0"
+    },
+    "checkpoints/ids_v14_pipeline.pkl": {
+      "exists": true,
+      "size_bytes": 130712,
+      "sha256": "8ca5a879e5872c7269539e10e61573c4cc6496ccbc0178dc43304ea276d98cbf"
+    },
+    "checkpoints/ids_v15_model.pth": {
+      "exists": false
+    },
+    "checkpoints/ids_v15_pipeline.pkl": {
+      "exists": false
+    }
+  }
+}

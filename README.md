@@ -21,10 +21,11 @@ Main flow:
 ## Current Status
 
 - v14 is the operational default because local artifacts exist in `checkpoints/`.
-- `scripts/smoke_check.py` passes locally with 12 tests.
-- Smoke coverage includes artifact contract validation, duplicate feature-name rejection, environment readiness checks, export config handling, checkpoint metadata patch logic, CSV normalization quality checks, MITRE mapping, LLM import/fallback behavior and v14 artifact loading.
+- `scripts/smoke_check.py` passes locally with 15 tests.
+- Smoke coverage includes artifact contract validation, threshold metadata validation, artifact manifest hashing, duplicate feature-name rejection, environment readiness checks, export config handling, checkpoint metadata patch logic, CSV input guardrails, CSV normalization quality checks, MITRE mapping, LLM import/fallback behavior and v14 artifact loading.
 - `llm_agent.py` lazy-loads provider clients, so importing dashboard code does not require an API key.
 - A Windows GitHub Actions smoke workflow is available at `.github/workflows/smoke.yml`.
+- A basic Dockerfile is available for dashboard deployment experiments.
 - v14 performance metrics have not been regenerated after the latest operational fixes; `results/ids_v14_results.json` records artifact smoke verification only.
 
 ## Features
@@ -33,6 +34,7 @@ Main flow:
 - Zero-day/OOD detection using reconstruction error, classifier confidence and calibrated hybrid thresholds.
 - Streamlit SOC dashboard for single alert review, CSV batch analysis, alert history and AI follow-up.
 - Real-world CSV normalization for common firewall/flow/Zeek/Suricata-like exports.
+- CSV upload guardrails for empty, oversized or malformed files.
 - SHAP top-feature explanation.
 - Heuristic MITRE ATT&CK mapping.
 - Optional LLM triage through Groq, Gemini, OpenAI or Anthropic.
@@ -44,6 +46,7 @@ src/
   ids_v14_unswnb15.py      # train/evaluate/export pipeline v14
   ids_v15_unswnb15.py      # experimental v15 pipeline
   inference_runtime.py     # pure verdict/zero-day/risk/CSV-quality helpers used by dashboard
+  input_guard.py           # uploaded CSV size/shape validation
   artifact_validator.py    # checkpoint/pipeline contract validation
   explainer.py             # SHAP explainer
   log_normalizer.py        # real-world CSV normalization
@@ -55,6 +58,7 @@ configs/
   config_default.yaml      # default v15 config
 docs/
   architecture.md
+  operations.md
   real_world_csv.md
   project_audit.md
 tests/
@@ -63,6 +67,8 @@ scripts/
   check_environment.py
   smoke_check.py
   install_requirements.ps1
+  quality_check.ps1
+  run_dashboard.ps1
   train_v14.ps1
   train_v15.ps1
   train.sh
@@ -99,6 +105,13 @@ python -m pip install --progress-bar off -r requirements-smoke.txt
 
 The UTF-8 environment variables avoid console encoding failures when the project path contains Vietnamese characters.
 
+Optional LLM setup:
+
+```powershell
+Copy-Item .env.example .env
+# then fill the provider key you actually use
+```
+
 ## Data
 
 Place UNSW-NB15 CSV files in `data/`, for example:
@@ -122,6 +135,12 @@ Default dashboard mode uses v14:
 ```powershell
 $env:IDS_MODEL_VERSION="v14"
 streamlit run dashboard/app.py
+```
+
+PowerShell launcher:
+
+```powershell
+.\scripts\run_dashboard.ps1
 ```
 
 Important environment variables:
@@ -184,6 +203,13 @@ Check local environment and artifact availability:
 python scripts/check_environment.py
 ```
 
+Create or verify local artifact hashes:
+
+```powershell
+python scripts/artifact_manifest.py
+python scripts/artifact_manifest.py --verify
+```
+
 Run the full smoke check:
 
 ```powershell
@@ -192,12 +218,20 @@ $env:PYTHONIOENCODING="utf-8"
 python scripts/smoke_check.py
 ```
 
+Run the full local quality gate:
+
+```powershell
+.\scripts\quality_check.ps1
+```
+
 Or run commands separately:
 
 ```bash
 python -m compileall src dashboard scripts export_model.py patch_checkpoint.py tests
 python -m unittest discover -s tests
 ```
+
+For demo and runtime procedures, see [docs/operations.md](docs/operations.md).
 
 ## Limitations
 

@@ -217,6 +217,13 @@ except ImportError:
     HAS_ARTIFACT_VALIDATOR = False
     validate_artifact_contract = None
 
+try:
+    from input_guard import validate_uploaded_csv
+    HAS_INPUT_GUARD = True
+except ImportError:
+    HAS_INPUT_GUARD = False
+    validate_uploaded_csv = None
+
 from inference_runtime import (
     assess_normalization_quality as runtime_assess_normalization_quality,
     ground_truth_verdict as runtime_ground_truth_verdict,
@@ -1190,8 +1197,33 @@ elif page == "[2] Analyze Alert":
         if uploaded:
             file_hash = _uploaded_file_hash(uploaded)
             _reset_bulk_results_for_new_file(file_hash)
-            raw_df = pd.read_csv(uploaded)
+            try:
+                raw_df = pd.read_csv(uploaded)
+            except UnicodeDecodeError:
+                uploaded.seek(0)
+                try:
+                    raw_df = pd.read_csv(uploaded, encoding="latin1")
+                    st.warning("CSV khong doc duoc bang UTF-8; da fallback sang latin1.")
+                except Exception as e:
+                    st.error(f"Khong doc duoc CSV: {e}")
+                    st.stop()
+            except Exception as e:
+                st.error(f"Khong doc duoc CSV: {e}")
+                st.stop()
+            input_validation = None
+            if HAS_INPUT_GUARD and validate_uploaded_csv is not None:
+                input_validation = validate_uploaded_csv(raw_df, size_bytes=getattr(uploaded, "size", None))
+                st.session_state["last_csv_input_validation"] = input_validation.as_dict()
             st.caption(f"File: {uploaded.name} | SHA256: {file_hash[:12]}")
+            if input_validation is not None:
+                if input_validation.ok:
+                    st.success(
+                        f"CSV input OK: {input_validation.rows:,} rows x {input_validation.columns:,} columns"
+                    )
+                else:
+                    st.error("CSV input khong hop le: " + "; ".join(input_validation.errors))
+                for warning in input_validation.warnings[:4]:
+                    st.warning(warning)
             with st.expander("Preview full CSV", expanded=True):
                 st.caption(f"{len(raw_df):,} rows x {len(raw_df.columns):,} columns")
                 preview_limit = min(len(raw_df), 5000)
@@ -1211,7 +1243,9 @@ elif page == "[2] Analyze Alert":
                 )
 
             if st.button("Phan tich TOAN BO file"):
-                if DEMO_MODE:
+                if input_validation is not None and not input_validation.ok:
+                    st.error("Khong the phan tich file CSV khi validation con loi.")
+                elif DEMO_MODE:
                     st.warning("DEMO MODE khong ho tro phan tich toan bo file.")
                 else:
                     raw = preprocess_raw_df(raw_df, feature_names or [])

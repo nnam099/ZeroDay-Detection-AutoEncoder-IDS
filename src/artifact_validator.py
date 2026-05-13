@@ -68,6 +68,8 @@ def validate_artifact_contract(checkpoint: dict[str, Any], pipeline: dict[str, A
         result.errors.append(
             f"class count mismatch: checkpoint.n_classes={n_classes}, label_encoder.classes_={len(label_classes)}"
         )
+    elif label_classes is not None and "Normal" not in {str(item) for item in label_classes}:
+        result.warnings.append("label_encoder.classes_ does not include Normal")
 
     scaler = pipeline.get("scaler")
     scaler_n_features = getattr(scaler, "n_features_in_", None)
@@ -83,8 +85,17 @@ def validate_artifact_contract(checkpoint: dict[str, Any], pipeline: dict[str, A
         result.warnings.append("thresholds are missing; dashboard will use fallback zero-day rule")
     elif not isinstance(thresholds, dict):
         result.errors.append("thresholds must be a dict when present")
-    elif not any(k in thresholds for k in ("hybrid", "ae_re", "vae_recon", "ood_ensemble")):
-        result.warnings.append("thresholds do not include a recognized zero-day score key")
+    else:
+        for key, value in thresholds.items():
+            try:
+                numeric_value = float(value)
+            except (TypeError, ValueError):
+                result.errors.append(f"thresholds.{key} must be numeric")
+                continue
+            if numeric_value < 0:
+                result.errors.append(f"thresholds.{key} must be non-negative")
+        if not any(k in thresholds for k in ("hybrid", "ae_re", "vae_recon", "ood_ensemble")):
+            result.warnings.append("thresholds do not include a recognized zero-day score key")
 
     checkpoint_version = checkpoint.get("version")
     pipeline_version = pipeline.get("version")

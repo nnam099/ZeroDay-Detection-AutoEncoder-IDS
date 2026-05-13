@@ -2,9 +2,11 @@ import os
 import json
 import pickle
 import sys
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
+from pathlib import Path
 
 import pandas as pd
 import torch
@@ -76,6 +78,23 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertTrue(any("duplicates" in err for err in result.errors))
 
+    def test_artifact_validator_rejects_invalid_thresholds(self):
+        from artifact_validator import validate_artifact_contract
+
+        scaler = RobustScaler().fit([[0, 1, 2], [3, 4, 5]])
+        label_encoder = LabelEncoder().fit(["Normal", "DoS"])
+        result = validate_artifact_contract(
+            {"model_state_dict": {}, "n_features": 3, "n_classes": 2, "thresholds": {"hybrid": -0.1}},
+            {
+                "scaler": scaler,
+                "label_encoder": label_encoder,
+                "feature_names": ["dur", "sbytes", "dbytes"],
+            },
+        )
+
+        self.assertFalse(result.ok)
+        self.assertTrue(any("non-negative" in err for err in result.errors))
+
     def test_patch_checkpoint_infers_dims_from_state_dict(self):
         from patch_checkpoint import infer_dims
 
@@ -115,7 +134,7 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertEqual(cfg.seed, 123)
 
     def test_environment_check_does_not_expose_secret_values(self):
-        from scripts.check_environment import collect_environment
+        from scripts.check_environment import assess_readiness, collect_environment
 
         old_provider = os.environ.get("LLM_PROVIDER")
         old_key = os.environ.get("GROQ_API_KEY")
@@ -135,6 +154,37 @@ class CoreSmokeTests(unittest.TestCase):
 
         self.assertTrue(env["llm"]["key_present"])
         self.assertNotIn("secret-value", json.dumps(env))
+
+        readiness = assess_readiness(
+            {
+                "packages": {"torch": False, "numpy": True, "pandas": True, "sklearn": True, "matplotlib": True, "dotenv": True},
+                "artifacts": {},
+                "data": {"data_dir": True},
+                "llm": {},
+            }
+        )
+        self.assertEqual(readiness["status"], "BLOCKED")
+        self.assertTrue(any("torch" in item for item in readiness["blockers"]))
+
+    def test_artifact_manifest_detects_hash_changes(self):
+        from scripts.artifact_manifest import build_manifest, verify_manifest
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = os.path.abspath(tmp)
+            os.makedirs(os.path.join(root, "checkpoints"))
+            artifact = os.path.join(root, "checkpoints", "ids_v14_model.pth")
+            with open(artifact, "wb") as f:
+                f.write(b"model-v1")
+
+            manifest = build_manifest(Path(root), ["checkpoints/ids_v14_model.pth"])
+            self.assertTrue(verify_manifest(Path(root), manifest)["ok"])
+
+            with open(artifact, "wb") as f:
+                f.write(b"model-v2")
+
+            result = verify_manifest(Path(root), manifest)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("sha256" in err for err in result["errors"]))
 
     def test_log_normalizer_maps_common_firewall_csv(self):
         from log_normalizer import normalize_real_world_logs
@@ -162,6 +212,28 @@ class CoreSmokeTests(unittest.TestCase):
             self.assertIn(col, normalized.columns)
         self.assertGreaterEqual(report.feature_coverage, 0.7)
         self.assertEqual(report.schema, "firewall_or_flow_csv")
+
+    def test_input_guard_rejects_bad_csv_shape(self):
+        from input_guard import CSVInputPolicy, validate_uploaded_csv
+
+        empty_df = pd.DataFrame()
+        result = validate_uploaded_csv(empty_df, size_bytes=10, policy=CSVInputPolicy(max_rows=10, min_columns=3))
+
+        self.assertFalse(result.ok)
+        self.assertTrue(any("no rows" in err for err in result.errors))
+        self.assertTrue(any("too few columns" in err for err in result.errors))
+
+        large_df = pd.DataFrame({"a": range(12), "b": range(12), "c": range(12)})
+        result = validate_uploaded_csv(large_df, size_bytes=10, policy=CSVInputPolicy(max_rows=10))
+
+        self.assertFalse(result.ok)
+        self.assertTrue(any("too many rows" in err for err in result.errors))
+
+        dup_df = pd.DataFrame([[1, 2, 3]], columns=["src_ip", "src_ip", "dst_ip"])
+        result = validate_uploaded_csv(dup_df)
+
+        self.assertFalse(result.ok)
+        self.assertTrue(any("duplicate column" in err for err in result.errors))
 
     def test_mitre_mapper_known_attack(self):
         from mitre_mapper import MITREMapper

@@ -6,7 +6,7 @@ Updated: 2026-05-13
 
 - `scripts/smoke_check.py` now runs with UTF-8 subprocess settings, so it works on Windows paths containing Vietnamese characters.
 - Python compile passes for `src/`, `dashboard/`, `export_model.py`, `patch_checkpoint.py` and `tests/`.
-- Smoke tests pass locally: 12 tests.
+- Smoke tests pass locally: 15 tests.
 - Checkpoint `ids_v14_model.pth` loads into `IDSModel` v14 without missing or unexpected weights.
 - Pipeline v14 has 61 features and matches `n_features` in the checkpoint.
 - `log_normalizer.py` maps common firewall/flow CSV columns into an UNSW-like flow schema.
@@ -14,11 +14,14 @@ Updated: 2026-05-13
 - Pure inference verdict/risk/CSV-quality helpers are split into `src/inference_runtime.py` and covered by smoke tests.
 - `llm_agent.py` no longer initializes the provider client on import; it initializes lazily when LLM output is requested.
 - `patch_checkpoint.py` now validates checkpoint structure, accepts a path argument and creates a backup by default.
-- `artifact_validator.py` rejects duplicate or empty feature names in pipeline metadata.
+- `artifact_validator.py` rejects duplicate/empty feature names and invalid threshold metadata.
 - `export_model.py` now exposes a CLI instead of hard-coding `data/quick_train`.
 - PowerShell train launchers are available for v14 and v15.
 - CI uses `requirements-smoke.txt` so optional dashboard/explainability packages do not slow down core smoke checks.
 - `scripts/check_environment.py` reports package/artifact/data readiness without exposing secret values.
+- `input_guard.py` validates uploaded CSV size/shape before dashboard batch inference.
+- `.env.example` documents optional provider/runtime environment variables without storing secrets.
+- `scripts/artifact_manifest.py` can create/verify SHA-256 manifests for local model artifacts.
 - A Windows GitHub Actions smoke workflow is available in `.github/workflows/smoke.yml`.
 
 ## Strengths
@@ -27,7 +30,7 @@ Updated: 2026-05-13
 - Artifact v14 stores the metadata needed for inference: scaler, label encoder, feature list and thresholds.
 - Dashboard has demo fallback when artifacts are missing and supports common real-world CSV uploads through the normalizer.
 - MITRE mapping is packaged separately and is easy to extend with more techniques/evidence rules.
-- Smoke tests cover the highest-risk runtime contracts: artifact compatibility, duplicate feature metadata rejection, environment readiness reporting, export config handling, checkpoint metadata patching, normalizer behavior, CSV quality classification, MITRE mapping and LLM import/fallback behavior.
+- Smoke tests cover the highest-risk runtime contracts: artifact compatibility, threshold metadata validation, artifact hash drift detection, duplicate feature metadata rejection, environment readiness reporting, export config handling, checkpoint metadata patching, CSV input guardrails, normalizer behavior, CSV quality classification, MITRE mapping and LLM import/fallback behavior.
 
 ## Current Risks
 
