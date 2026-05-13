@@ -95,6 +95,27 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertTrue(any("non-negative" in err for err in result.errors))
 
+    def test_artifact_validator_allows_negative_energy_threshold(self):
+        from artifact_validator import validate_artifact_contract
+
+        scaler = RobustScaler().fit([[0, 1, 2], [3, 4, 5]])
+        label_encoder = LabelEncoder().fit(["Normal", "DoS"])
+        result = validate_artifact_contract(
+            {
+                "model_state_dict": {},
+                "n_features": 3,
+                "n_classes": 2,
+                "thresholds": {"hybrid": 0.5, "energy": -1.2},
+            },
+            {
+                "scaler": scaler,
+                "label_encoder": label_encoder,
+                "feature_names": ["dur", "sbytes", "dbytes"],
+            },
+        )
+
+        self.assertTrue(result.ok)
+
     def test_patch_checkpoint_infers_dims_from_state_dict(self):
         from patch_checkpoint import infer_dims
 
@@ -294,7 +315,7 @@ class CoreSmokeTests(unittest.TestCase):
         old_provider = os.environ.get("LLM_PROVIDER")
         old_key = os.environ.get("GROQ_API_KEY")
         os.environ["LLM_PROVIDER"] = "groq"
-        os.environ.pop("GROQ_API_KEY", None)
+        os.environ["GROQ_API_KEY"] = ""
         sys.modules.pop("llm_agent", None)
         try:
             from llm_agent import SOCTriageAgent

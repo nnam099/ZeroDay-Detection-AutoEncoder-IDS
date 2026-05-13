@@ -8,8 +8,8 @@ import pandas as pd
 
 @dataclass
 class CSVInputPolicy:
-    max_bytes: int = 50 * 1024 * 1024
-    max_rows: int = 250_000
+    max_bytes: int = 200 * 1024 * 1024
+    max_rows: int = 1_000_000
     max_columns: int = 250
     min_columns: int = 3
 

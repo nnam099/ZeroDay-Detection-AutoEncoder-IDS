@@ -86,13 +86,25 @@ def validate_artifact_contract(checkpoint: dict[str, Any], pipeline: dict[str, A
     elif not isinstance(thresholds, dict):
         result.errors.append("thresholds must be a dict when present")
     else:
+        non_negative_thresholds = {
+            "hybrid",
+            "ae_re",
+            "vae_recon",
+            "ood_ensemble",
+            "gradbp_l2",
+            "softmax",
+            "fv_cluster",
+            "knn_dist",
+        }
         for key, value in thresholds.items():
             try:
                 numeric_value = float(value)
             except (TypeError, ValueError):
                 result.errors.append(f"thresholds.{key} must be numeric")
                 continue
-            if numeric_value < 0:
+            if numeric_value != numeric_value or numeric_value in {float("inf"), float("-inf")}:
+                result.errors.append(f"thresholds.{key} must be finite")
+            if key in non_negative_thresholds and numeric_value < 0:
                 result.errors.append(f"thresholds.{key} must be non-negative")
         if not any(k in thresholds for k in ("hybrid", "ae_re", "vae_recon", "ood_ensemble")):
             result.warnings.append("thresholds do not include a recognized zero-day score key")
