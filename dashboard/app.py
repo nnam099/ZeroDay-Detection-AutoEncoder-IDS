@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 SOC AI Platform v15 - Dashboard
 Compatible: Windows, Python 3.9+
@@ -841,81 +841,6 @@ def get_llm_analysis(result: dict, comps: dict):
         }
 
 # ── Display result ────────────────────────────────────────────────
-def _display_result_legacy_unused(result: dict, llm: dict):
-    sev_label = {"CRITICAL": "[CRITICAL]", "HIGH": "[HIGH]", "MEDIUM": "[MEDIUM]", "LOW": "[LOW]"}
-    sev_color = {"CRITICAL": "red", "HIGH": "orange", "MEDIUM": "yellow", "LOW": "green"}
-    sev = llm.get('severity', 'HIGH')
-
-    if result.get('demo_mode'):
-        st.info("DEMO SANDBOX - Du lieu gia lap, khong dung de ket luan an ninh.")
-
-    st.subheader(f"Alert #{result['alert_id']} | {sev_label.get(sev, sev)} | {result['timestamp']}")
-    st.info(f"**Verdict:** {llm.get('verdict', '')}")
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Hybrid Score", f"{result['hybrid_score']:.3f}", delta="High" if result['hybrid_score'] > 0.6 else "Normal")
-    col2.metric("AE Score", f"{result['ae_score']:.3f}")
-    col3.metric("Detection", result['predicted_class'])
-    col4.metric("Classifier", result.get('classifier_class', result['predicted_class']))
-
-    # Probability bar
-    st.markdown("**Class probabilities:**")
-    prob_df = pd.DataFrame({
-        "Class": CLASS_NAMES[:len(result['probs'])],
-        "Probability": [round(p, 4) for p in result['probs']]
-    })
-    st.bar_chart(prob_df.set_index("Class"))
-
-    tab1, tab2, tab3, tab4 = st.tabs(["AI Analysis", "SHAP Features", "MITRE ATT&CK", "Actions"])
-
-    with tab1:
-        st.markdown(f"**Severity:** `{sev}`")
-        st.markdown("**Attack Summary:**")
-        st.write(llm.get('attack_summary', 'N/A'))
-        st.markdown(f"**False Positive Risk:** `{llm.get('false_positive_risk', 'N/A')}`")
-        if llm.get('false_positive_reason'):
-            st.write(llm['false_positive_reason'])
-        st.markdown(f"**Analyst Note:** {llm.get('analyst_note', '')}")
-
-    with tab2:
-        feats = result.get('top_features', [])
-        if feats:
-            df_shap = pd.DataFrame(feats, columns=["Feature", "SHAP Value", "Actual Value"])
-            df_shap["SHAP Value"] = df_shap["SHAP Value"].round(4)
-            df_shap["Actual Value"] = df_shap["Actual Value"].round(4)
-            df_shap["Direction"] = df_shap["SHAP Value"].apply(lambda x: "Tang nguy co" if x > 0 else "Giam nguy co")
-            st.dataframe(df_shap, width="stretch")
-            st.bar_chart(df_shap.set_index("Feature")["SHAP Value"])
-        else:
-            st.write(result.get('shap_summary', 'SHAP chua chay'))
-
-    with tab3:
-        mitre = result.get('mitre_result')
-        if mitre:
-            techniques = mitre.get('techniques') or mitre.get('suspected_techniques', [])
-            for t in techniques:
-                url = f"https://attack.mitre.org/techniques/{t['id']}/"
-                st.markdown(f"**[{t['id']}]** {t['name']} — *{t['tactic']}* → [Xem chi tiet]({url})")
-        else:
-            st.write(result.get('mitre_summary', 'MITRE chua chay'))
-
-    with tab4:
-        actions = llm.get('recommended_actions', [])
-        for i, action in enumerate(actions, 1):
-            st.checkbox(f"{i}. {action}", key=f"act_{result['alert_id']}_{i}")
-        if st.button("Export JSON Report", key=f"export_{result['alert_id']}"):
-            report = {**result, "llm_analysis": llm}
-            report.pop('shap_values', None)  # khong serialize numpy array
-            report.pop('probs', None)
-            st.download_button(
-                "Download JSON",
-                data=json.dumps(report, ensure_ascii=False, indent=2, default=str),
-                file_name=f"alert_{result['alert_id']}.json",
-                mime="application/json"
-            )
-
-    st.session_state['last_alert']  = result
-    st.session_state['last_llm']    = llm
 
 # ═════════════════════════════════════════════════════════════════
 # PAGE: Dashboard
@@ -1446,16 +1371,11 @@ elif page == "[3] OOD Candidate Logs":
                 raw_df[family_col].astype(str).reset_index(drop=True)
                 if family_col else ""
             )
-        if "detection" not in logs.columns:
-            logs["detection"] = logs.apply(
-                lambda r: _traffic_verdict(r.get("is_zeroday"), r.get("classifier_class", r.get("predicted_class", "Unknown"))),
-                axis=1,
-            )
-        else:
-            logs["detection"] = logs.apply(
-                lambda r: _traffic_verdict(r.get("is_zeroday"), r.get("classifier_class", r.get("predicted_class", "Unknown"))),
-                axis=1,
-            )
+        # Luon recompute de dam bao nhat quan voi is_zeroday moi nhat
+        logs["detection"] = logs.apply(
+            lambda r: _traffic_verdict(r.get("is_zeroday"), r.get("classifier_class", r.get("predicted_class", "Unknown"))),
+            axis=1,
+        )
 
         zd_logs = logs[logs["is_zeroday"].astype(bool)].copy()
         total = len(logs)
@@ -1799,17 +1719,24 @@ SOC-AI-Platform-v15/
 
     st.markdown("### Buoc 2: Export model tu IDS v14")
     st.code("""
-# Them vao cuoi file ids_v14_unswnb15.py cua ban:
+# QUAN TRONG: Phai save dung format sau de dashboard load duoc
 import pickle, torch
 
-# Save model
-torch.save({'model': model}, 'checkpoints/ids_v14_model.pth')
+torch.save({
+    'model_state_dict': model.state_dict(),   # weights cua model
+    'n_features'      : X_train.shape[1],     # so luong features
+    'n_classes'       : len(le.classes_),     # so luong class
+    'hidden'          : 256,                  # hidden dim backbone
+    'ae_hidden'       : 128,                  # hidden dim autoencoder
+}, 'checkpoints/ids_v14_model.pth')
 
-# Save pipeline (scaler + feature names)
+# Save pipeline
 pipeline = {
     'scaler'       : scaler,
-    'feature_names': list(X_train.columns),
+    'feature_names': feat_cols,
     'label_encoder': le,
+    'n_features'   : X_train.shape[1],
+    'n_classes'    : len(le.classes_),
 }
 with open('checkpoints/ids_v14_pipeline.pkl', 'wb') as f:
     pickle.dump(pipeline, f)
