@@ -54,7 +54,10 @@ def _build_client():
 
     elif LLM_PROVIDER == "openai":
         from openai import OpenAI
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", "").strip())
+        api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            raise ValueError("Chua co OPENAI_API_KEY trong file .env")
+        client = OpenAI(api_key=api_key)
 
         def call(prompt: str) -> str:
             r = client.chat.completions.create(
@@ -67,7 +70,10 @@ def _build_client():
 
     elif LLM_PROVIDER == "anthropic":
         import anthropic
-        client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", "").strip())
+        api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+        if not api_key:
+            raise ValueError("Chua co ANTHROPIC_API_KEY trong file .env")
+        client = anthropic.Anthropic(api_key=api_key)
 
         def call(prompt: str) -> str:
             r = client.messages.create(
@@ -87,18 +93,19 @@ try:
     _call_llm = _build_client()
     print(f"[LLM] Provider: {LLM_PROVIDER} - OK")
 except Exception as e:
-    print(f"[LLM] Loi khoi tao {LLM_PROVIDER}: {e}")
+    init_error = str(e)
+    print(f"[LLM] Loi khoi tao {LLM_PROVIDER}: {init_error}")
     # Fallback: tra ve message loi thay vi crash
     def _call_llm(prompt: str) -> str:
         return json.dumps({
             "severity": "HIGH",
-            "verdict": f"LLM chua san sang: {e}",
+            "verdict": f"LLM chua san sang: {init_error}",
             "attack_summary": "Kiem tra lai API key va provider trong llm_agent.py",
             "recommended_actions": ["Kiem tra .env file", "Kiem tra API key con han"],
             "false_positive_risk": "UNKNOWN",
             "false_positive_reason": "N/A",
             "ood_confidence": "UNKNOWN",
-            "analyst_note": str(e),
+            "analyst_note": init_error,
         }, ensure_ascii=False)
 
 

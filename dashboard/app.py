@@ -14,6 +14,7 @@ import pandas as pd
 import json
 import uuid
 import pickle
+import hashlib
 from datetime import datetime
 
 # ── Page config (phai dat truoc bat ky st.* nao) ─────────────────
@@ -198,6 +199,14 @@ except ImportError:
     HAS_MITRE = False
     st.warning("[!] Khong tim thay mitre_mapper.py trong src/")
 
+try:
+    from log_normalizer import normalize_real_world_logs
+    HAS_LOG_NORMALIZER = True
+except ImportError:
+    HAS_LOG_NORMALIZER = False
+    normalize_real_world_logs = None
+    st.warning("[!] Khong tim thay log_normalizer.py trong src/ - CSV thuc te se khong duoc chuan hoa nang cao")
+
 HAS_LLM = False
 if LLM_DEP and HAS_LLM_DEPS:
     try:
@@ -227,6 +236,7 @@ DATA_PATH = os.getenv("IDS_SAMPLE_DATA_PATH", os.path.join(DATA_DIR, 'UNSW_NB15_
 # De tranh sai thu tu do LabelEncoder sort theo alphabet
 CLASS_NAMES  = ["Normal", "DoS", "Exploits", "Reconnaissance", "Generic"]  # fallback
 AE_THRESHOLD = 0.5
+HYBRID_THRESHOLD = 0.5
 PIPELINE_THRESHOLDS = None
 PIPELINE_META = {}
 
@@ -281,6 +291,7 @@ st.sidebar.markdown(
     <div class="health-grid">
         <div class="health-label">SHAP</div><div>{_health(HAS_EXPLAINER)}</div>
         <div class="health-label">MITRE</div><div>{_health(HAS_MITRE)}</div>
+        <div class="health-label">CSV Normalize</div><div>{_health(HAS_LOG_NORMALIZER)}</div>
         <div class="health-label">LLM</div><div>{_health(llm_ok, warn=HAS_LLM)}</div>
         <div class="health-label">Model</div><div>{_health(os.path.exists(MODEL_PATH))}</div>
         <div class="health-label">Pipeline</div><div>{_health(os.path.exists(PIPE_PATH))}</div>
@@ -389,6 +400,7 @@ model, scaler, feature_names, label_encoder = load_model()
 
 if PIPELINE_THRESHOLDS:
     AE_THRESHOLD = float(PIPELINE_THRESHOLDS.get('ae_re', AE_THRESHOLD))
+    HYBRID_THRESHOLD = float(PIPELINE_THRESHOLDS.get('hybrid', HYBRID_THRESHOLD))
 
 # Lay CLASS_NAMES dung thu tu tu label_encoder (tranh sai do sort alphabet)
 if label_encoder is not None:
@@ -401,6 +413,42 @@ def _encode_categorical_column(series: pd.Series, mapping=None) -> np.ndarray:
     codes, _ = pd.factorize(values, sort=True)
     return codes.astype(np.float32)
 
+def _uploaded_file_hash(uploaded_file) -> str:
+    return hashlib.sha256(uploaded_file.getvalue()).hexdigest()
+
+def _reset_bulk_results_for_new_file(file_hash: str) -> None:
+    if st.session_state.get('bulk_source_file_hash') == file_hash:
+        return
+    for key in [
+        'bulk_result_df',
+        'bulk_raw_df',
+        'bulk_source_file_hash',
+        'last_log_normalization_report',
+        'bulk_score_summary',
+    ]:
+        st.session_state.pop(key, None)
+    st.session_state['current_upload_file_hash'] = file_hash
+
+def _zero_day_decision(ae_score, max_prob, hybrid_score):
+    if PIPELINE_THRESHOLDS and 'hybrid' in PIPELINE_THRESHOLDS:
+        return np.asarray(hybrid_score) > HYBRID_THRESHOLD, 'hybrid_calibrated'
+    return (np.asarray(ae_score) > AE_THRESHOLD) & (np.asarray(max_prob) < 0.6), 'ae_plus_confidence_fallback'
+
+def _traffic_verdict(is_zeroday, classifier_class) -> str:
+    if bool(is_zeroday):
+        return "Zero-Day"
+    if str(classifier_class).strip().lower() == "normal":
+        return "Normal"
+    return "Known-Attack"
+
+def _ground_truth_verdict(label) -> str:
+    value = str(label).strip().lower()
+    if value in {"", "nan", "none", "-", "unknown"}:
+        return ""
+    if value in {"0", "benign", "normal"}:
+        return "Normal"
+    return "Known-Attack"
+
 def preprocess_raw_df(df_raw: pd.DataFrame, feat_cols: list) -> np.ndarray:
     """
     Ap dung dung cac buoc tien xu ly nhu trong prepare_splits().
@@ -411,6 +459,18 @@ def preprocess_raw_df(df_raw: pd.DataFrame, feat_cols: list) -> np.ndarray:
 
     df = df_raw.copy()
     categorical_maps = PIPELINE_META.get('categorical_maps', {}) if PIPELINE_META else {}
+
+    # 0. Chuan hoa CSV log thuc te ve schema flow gan UNSW-NB15.
+    # Ho tro firewall/NetFlow/Zeek/Suricata CSV va van tuong thich UNSW raw.
+    if HAS_LOG_NORMALIZER and normalize_real_world_logs is not None:
+        try:
+            df, report = normalize_real_world_logs(df, expected_features=feat_cols)
+            st.session_state['last_log_normalization_report'] = report.as_dict()
+        except Exception as e:
+            st.session_state['last_log_normalization_report'] = {
+                "schema": "normalization_failed",
+                "error": str(e),
+            }
 
     # 1. Encode cac cot categorical -> _num columns
     for cat in ['proto', 'service', 'state']:
@@ -486,8 +546,10 @@ def mock_inference(n_features=49):
     ae_score     = float(np.random.uniform(0.3, 0.95))
     max_prob     = float(np.random.uniform(0.4, 0.99))
     pred_idx     = int(np.random.randint(0, len(CLASS_NAMES)))
+    classifier_class = CLASS_NAMES[pred_idx]
     hybrid_score = 0.5 * ae_score + 0.5 * (1 - max_prob)
     is_zeroday   = ae_score > AE_THRESHOLD and max_prob < 0.6
+    verdict       = _traffic_verdict(is_zeroday, classifier_class)
 
     # SHAP gia lap
     if feature_names:
@@ -510,7 +572,8 @@ def mock_inference(n_features=49):
         "hybrid_score"   : hybrid_score,
         "ae_score"       : ae_score,
         "max_prob"       : max_prob,
-        "predicted_class": "Zero-Day" if is_zeroday else CLASS_NAMES[pred_idx],
+        "predicted_class": verdict,
+        "classifier_class": classifier_class,
         "is_zeroday"     : is_zeroday,
         "shap_summary"   : shap_summary,
         "mitre_summary"  : "MITRE mapping: [T1595] Active Scanning (Reconnaissance)",
@@ -546,7 +609,9 @@ def run_full_pipeline(raw_features: np.ndarray, comps: dict):
             ae_score = float(1.0 - max_prob + np.random.uniform(0, 0.1))
 
     hybrid_score = 0.5 * ae_score + 0.5 * (1 - max_prob)
-    is_zeroday   = ae_score > AE_THRESHOLD and max_prob < 0.6
+    is_zeroday, decision_rule = _zero_day_decision(ae_score, max_prob, hybrid_score)
+    is_zeroday = bool(is_zeroday)
+    verdict = _traffic_verdict(is_zeroday, pred_class)
 
     result = {
         "alert_id"       : str(uuid.uuid4())[:8].upper(),
@@ -554,8 +619,10 @@ def run_full_pipeline(raw_features: np.ndarray, comps: dict):
         "hybrid_score"   : hybrid_score,
         "ae_score"       : ae_score,
         "max_prob"       : max_prob,
-        "predicted_class": "Zero-Day" if is_zeroday else pred_class,
+        "predicted_class": verdict,
+        "classifier_class": pred_class,
         "is_zeroday"     : is_zeroday,
+        "zero_day_rule"   : decision_rule,
         "probs"          : probs.tolist(),
         "demo_mode"      : False,
     }
@@ -642,14 +709,17 @@ def run_batch_inference(raw_features: np.ndarray, batch_size: int = 512) -> pd.D
     pred_idx = probs_all.argmax(axis=1)
     pred_class = [CLASS_NAMES[i] if i < len(CLASS_NAMES) else "Unknown" for i in pred_idx]
     hybrid_score = 0.5 * ae_all + 0.5 * (1 - max_prob)
-    is_zeroday = (ae_all > AE_THRESHOLD) & (max_prob < 0.6)
+    is_zeroday, decision_rule = _zero_day_decision(ae_all, max_prob, hybrid_score)
+    verdict = [_traffic_verdict(zd, cls) for zd, cls in zip(is_zeroday, pred_class)]
 
     return pd.DataFrame({
-        "predicted_class": pred_class,
+        "predicted_class": verdict,
+        "classifier_class": pred_class,
         "max_prob": max_prob,
         "ae_score": ae_all,
         "hybrid_score": hybrid_score,
         "is_zeroday": is_zeroday.astype(bool),
+        "zero_day_rule": decision_rule,
     })
 
 def severity_rank(severity: str) -> int:
@@ -684,8 +754,8 @@ def render_soc_header(title: str, subtitle: str):
 def build_alert_context_from_log(row_scores: dict) -> dict:
     source_row = int(row_scores.get("source_row", 0))
     family = str(row_scores.get("zero_day_family") or "")
-    classifier_class = str(row_scores.get("predicted_class", "Unknown"))
-    detection = str(row_scores.get("detection") or ("Zero-Day / " + (family or "Unknown") if row_scores.get("is_zeroday") else classifier_class))
+    classifier_class = str(row_scores.get("classifier_class", row_scores.get("predicted_class", "Unknown")))
+    detection = str(row_scores.get("detection") or _traffic_verdict(row_scores.get("is_zeroday"), classifier_class))
     return {
         "alert_id": f"ZD-{source_row:06d}",
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -695,7 +765,7 @@ def build_alert_context_from_log(row_scores: dict) -> dict:
         "max_prob": float(row_scores.get("max_prob", 0)),
         "predicted_class": detection,
         "classifier_class": classifier_class,
-        "zero_day_family": family or "Unknown",
+        "zero_day_family": family or "",
         "is_zeroday": bool(row_scores.get("is_zeroday", False)),
         "shap_summary": "Batch log context - SHAP explanation not computed for this row.",
         "mitre_summary": "",
@@ -745,8 +815,8 @@ def display_result(result: dict, llm: dict):
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Hybrid Score", f"{result['hybrid_score']:.3f}", delta="High" if result['hybrid_score'] > 0.6 else "Normal")
     col2.metric("AE Score", f"{result['ae_score']:.3f}")
-    col3.metric("Classifier", result['predicted_class'])
-    col4.metric("Zero-Day", "YES" if result['is_zeroday'] else "NO")
+    col3.metric("Detection", result['predicted_class'])
+    col4.metric("Classifier", result.get('classifier_class', result['predicted_class']))
 
     # Probability bar
     st.markdown("**Class probabilities:**")
@@ -835,8 +905,8 @@ def display_result(result: dict, llm: dict):
     col1.metric("Risk Score", f"{risk}/100")
     col2.metric("Hybrid", f"{result['hybrid_score']:.3f}")
     col3.metric("AE / VAE", f"{result['ae_score']:.3f}")
-    col4.metric("Classifier", result['predicted_class'])
-    col5.metric("Zero-Day", "YES" if result['is_zeroday'] else "NO")
+    col4.metric("Detection", result['predicted_class'])
+    col5.metric("Classifier", result.get('classifier_class', result['predicted_class']))
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["Triage", "Model Evidence", "MITRE ATT&CK", "Response", "Raw Report"])
 
@@ -1065,15 +1135,19 @@ elif page == "[2] Analyze Alert":
 
         if st.button("Phan tich", type="primary"):
             hybrid = 0.5 * ae_val + 0.5 * (1 - max_p)
-            is_zd  = ae_val > AE_THRESHOLD and max_p < 0.6
+            is_zd, decision_rule = _zero_day_decision(ae_val, max_p, hybrid)
+            is_zd = bool(is_zd)
+            verdict = _traffic_verdict(is_zd, atk_cls)
             result = {
                 "alert_id"       : str(uuid.uuid4())[:8].upper(),
                 "timestamp"      : datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "hybrid_score"   : hybrid,
                 "ae_score"       : ae_val,
                 "max_prob"       : max_p,
-                "predicted_class": "Zero-Day" if is_zd else atk_cls,
+                "predicted_class": verdict,
+                "classifier_class": atk_cls,
                 "is_zeroday"     : is_zd,
+                "zero_day_rule"   : decision_rule,
                 "shap_summary"   : "Manual input - khong co SHAP data",
                 "mitre_summary"  : "",
                 "top_features"   : [],
@@ -1098,21 +1172,53 @@ elif page == "[2] Analyze Alert":
 
     else:  # Upload CSV
         uploaded = st.file_uploader(
-            "Upload CSV (du lieu mang UNSW-NB15 raw, co cac cot feature goc)", type="csv"
+            "Upload CSV (UNSW-NB15 raw hoac log thuc te: firewall, NetFlow, Zeek, Suricata)", type="csv"
         )
         if uploaded:
+            file_hash = _uploaded_file_hash(uploaded)
+            _reset_bulk_results_for_new_file(file_hash)
             raw_df = pd.read_csv(uploaded)
-            st.write("Preview:", raw_df.head())
+            st.caption(f"File: {uploaded.name} | SHA256: {file_hash[:12]}")
+            with st.expander("Preview full CSV", expanded=True):
+                st.caption(f"{len(raw_df):,} rows x {len(raw_df.columns):,} columns")
+                preview_limit = min(len(raw_df), 5000)
+                preview_rows = st.slider(
+                    "So dong preview",
+                    min_value=10,
+                    max_value=preview_limit,
+                    value=min(200, preview_limit),
+                    step=10,
+                    key=f"raw_preview_rows_{file_hash[:8]}",
+                )
+                st.dataframe(
+                    raw_df.head(preview_rows),
+                    use_container_width=True,
+                    hide_index=True,
+                    height=560,
+                )
 
             if st.button("Phan tich TOAN BO file"):
                 if DEMO_MODE:
                     st.warning("DEMO MODE khong ho tro phan tich toan bo file.")
                 else:
                     raw = preprocess_raw_df(raw_df, feature_names or [])
+                    norm_report = st.session_state.get('last_log_normalization_report')
+                    if isinstance(norm_report, dict):
+                        with st.expander("Bao cao chuan hoa CSV", expanded=True):
+                            c1, c2, c3, c4 = st.columns(4)
+                            c1.metric("Schema", norm_report.get("schema", "unknown"))
+                            c2.metric("Rows", norm_report.get("rows", len(raw_df)))
+                            c3.metric("Mapped cols", len(norm_report.get("mapped_columns", {})))
+                            cov = norm_report.get("feature_coverage")
+                            c4.metric("Feature coverage", f"{float(cov) * 100:.1f}%" if isinstance(cov, (int, float)) else "N/A")
+                            if norm_report.get("missing_core_features"):
+                                st.caption("Missing core features: " + ", ".join(norm_report["missing_core_features"][:12]))
+                            if norm_report.get("derived_columns"):
+                                st.caption("Derived features: " + ", ".join(norm_report["derived_columns"][:18]))
                     if raw.shape[1] == 0 or (raw == 0).all():
                         st.error(
                             "Khong tim thay features hop le trong file CSV nay. "
-                            "Vui long upload file CSV co cac cot feature goc cua UNSW-NB15."
+                            "Vui long upload CSV co truong flow co ban nhu src/dst IP, port, protocol, bytes, packets, duration/timestamp."
                         )
                     else:
                         with st.spinner("Dang phan tich toan bo file..."):
@@ -1128,18 +1234,38 @@ elif page == "[2] Analyze Alert":
                             )
                             if family_col:
                                 result_df["zero_day_family"] = raw_df[family_col].astype(str).reset_index(drop=True)
+                                result_df["ground_truth"] = result_df["zero_day_family"].map(_ground_truth_verdict)
                             else:
                                 result_df["zero_day_family"] = ""
-                            result_df["detection"] = np.where(
-                                result_df["is_zeroday"].astype(bool),
-                                "Zero-Day / " + result_df["zero_day_family"].replace("", "Unknown").astype(str),
-                                "Known / " + result_df["predicted_class"].astype(str),
+                                result_df["ground_truth"] = ""
+                            result_df["detection"] = result_df.apply(
+                                lambda r: _traffic_verdict(r["is_zeroday"], r.get("classifier_class", r.get("predicted_class", "Unknown"))),
+                                axis=1,
                             )
+                            if "ground_truth" in result_df.columns:
+                                result_df["correct_vs_ground_truth"] = np.where(
+                                    result_df["ground_truth"].astype(str).str.len() > 0,
+                                    result_df["detection"].astype(str) == result_df["ground_truth"].astype(str),
+                                    np.nan,
+                                )
+                            st.session_state['bulk_score_summary'] = {
+                                "ae_min": float(result_df["ae_score"].min()),
+                                "ae_median": float(result_df["ae_score"].median()),
+                                "ae_max": float(result_df["ae_score"].max()),
+                                "hybrid_min": float(result_df["hybrid_score"].min()),
+                                "hybrid_median": float(result_df["hybrid_score"].median()),
+                                "hybrid_max": float(result_df["hybrid_score"].max()),
+                                "hybrid_threshold": HYBRID_THRESHOLD,
+                                "ae_threshold": AE_THRESHOLD,
+                                "decision_rule": str(result_df["zero_day_rule"].iloc[0]) if "zero_day_rule" in result_df else "unknown",
+                            }
                             st.session_state['bulk_result_df'] = result_df
                             st.session_state['bulk_raw_df'] = raw_df.reset_index(drop=True)
+                            st.session_state['bulk_source_file_hash'] = file_hash
 
             result_df = st.session_state.get('bulk_result_df')
-            if isinstance(result_df, pd.DataFrame) and not result_df.empty:
+            result_hash = st.session_state.get('bulk_source_file_hash')
+            if isinstance(result_df, pd.DataFrame) and not result_df.empty and result_hash == file_hash:
                 st.success(f"Da phan tich {len(result_df):,} dong.")
 
                 # Luu alert gan nhat de tab Ask AI co the su dung
@@ -1153,6 +1279,8 @@ elif page == "[2] Analyze Alert":
                         "ae_score": float(top_row['ae_score']),
                         "max_prob": float(top_row['max_prob']),
                         "predicted_class": str(top_row['predicted_class']),
+                        "classifier_class": str(top_row.get('classifier_class', top_row['predicted_class'])),
+                        "detection": str(top_row.get('detection', top_row['predicted_class'])),
                         "is_zeroday": bool(top_row['is_zeroday']),
                         "demo_mode": False,
                     }
@@ -1167,12 +1295,41 @@ elif page == "[2] Analyze Alert":
                     value=min(100, max_rows),
                     step=10,
                 )
-                st.dataframe(result_df.head(rows_to_show), use_container_width=True)
+                st.dataframe(
+                    result_df.head(rows_to_show),
+                    use_container_width=True,
+                    hide_index=True,
+                    height=620,
+                )
 
                 total = len(result_df)
                 zd_cnt = int(result_df['is_zeroday'].sum())
                 st.metric("Zero-Day detected", zd_cnt)
                 st.metric("Zero-Day rate", f"{(zd_cnt/total*100):.2f}%")
+                verdict_counts = (
+                    result_df["detection"]
+                    .value_counts()
+                    .reindex(["Normal", "Known-Attack", "Zero-Day"], fill_value=0)
+                    .rename_axis("Label")
+                    .reset_index(name="Count")
+                )
+                st.dataframe(verdict_counts, use_container_width=True, hide_index=True)
+                if "ground_truth" in result_df.columns and result_df["ground_truth"].astype(str).str.len().any():
+                    gt_counts = (
+                        result_df["ground_truth"]
+                        .value_counts()
+                        .reindex(["Normal", "Known-Attack"], fill_value=0)
+                        .rename_axis("Ground Truth")
+                        .reset_index(name="Count")
+                    )
+                    comparable = result_df["correct_vs_ground_truth"].dropna()
+                    gt_acc = float(comparable.mean()) if len(comparable) else 0.0
+                    st.metric("Accuracy vs CSV Label", f"{gt_acc * 100:.2f}%")
+                    st.dataframe(gt_counts, use_container_width=True, hide_index=True)
+                score_summary = st.session_state.get('bulk_score_summary')
+                if isinstance(score_summary, dict):
+                    with st.expander("Kiem tra score va nguong phat hien", expanded=False):
+                        st.json(score_summary)
 
                 st.download_button(
                     "Download ket qua (CSV)",
@@ -1187,7 +1344,7 @@ elif page == "[2] Analyze Alert":
 elif page == "[3] Zero-Day Logs":
     render_soc_header(
         "Zero-Day Logs",
-        "Zero-day verdicts are shown separately from the known-class classifier so analysts can see both the anomaly decision and the original attack family when available.",
+        "Zero-day verdicts use a single Zero-Day label. Dataset family values are kept only as optional reference metadata.",
     )
 
     result_df = st.session_state.get('bulk_result_df')
@@ -1211,38 +1368,40 @@ elif page == "[3] Zero-Day Logs":
                 if family_col else ""
             )
         if "detection" not in logs.columns:
-            family = logs["zero_day_family"].replace("", "Unknown").astype(str)
-            logs["detection"] = np.where(
-                logs["is_zeroday"].astype(bool),
-                "Zero-Day / " + family,
-                "Known / " + logs["predicted_class"].astype(str),
+            logs["detection"] = logs.apply(
+                lambda r: _traffic_verdict(r.get("is_zeroday"), r.get("classifier_class", r.get("predicted_class", "Unknown"))),
+                axis=1,
+            )
+        else:
+            logs["detection"] = logs.apply(
+                lambda r: _traffic_verdict(r.get("is_zeroday"), r.get("classifier_class", r.get("predicted_class", "Unknown"))),
+                axis=1,
             )
 
         zd_logs = logs[logs["is_zeroday"].astype(bool)].copy()
         total = len(logs)
         zd_total = len(zd_logs)
-        attack_classes = sorted(logs["predicted_class"].astype(str).unique().tolist())
-        families = sorted([x for x in logs["zero_day_family"].astype(str).unique().tolist() if x and x != "nan"])
+        verdicts = sorted(logs["detection"].astype(str).unique().tolist())
+        classifier_classes = sorted(logs.get("classifier_class", logs["predicted_class"]).astype(str).unique().tolist())
 
-        c1, c2, c3, c4, c5 = st.columns(5)
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("Batch Rows", f"{total:,}")
         c2.metric("Zero-Day Logs", f"{zd_total:,}")
         c3.metric("Zero-Day Rate", f"{(zd_total / total * 100):.2f}%" if total else "0.00%")
-        c4.metric("Known Classifier Classes", len(attack_classes))
-        c5.metric("ZD Families", len(families))
+        c4.metric("Verdict Labels", len(verdicts))
 
         st.markdown("### Filters")
         f1, f2, f3, f4 = st.columns([1, 1, 1, 1])
         show_only_zd = f1.toggle("Only Zero-Day", value=True)
-        selected_family = f2.selectbox("Zero-day family", ["All"] + families)
-        selected_class = f3.selectbox("Classifier class", ["All"] + attack_classes)
+        selected_verdict = f2.selectbox("Verdict", ["All"] + verdicts)
+        selected_class = f3.selectbox("Classifier class", ["All"] + classifier_classes)
         min_score = f4.number_input("Min hybrid score", min_value=0.0, value=0.0, step=0.1)
 
         view_df = zd_logs if show_only_zd else logs
-        if selected_family != "All":
-            view_df = view_df[view_df["zero_day_family"].astype(str) == selected_family]
+        if selected_verdict != "All":
+            view_df = view_df[view_df["detection"].astype(str) == selected_verdict]
         if selected_class != "All":
-            view_df = view_df[view_df["predicted_class"].astype(str) == selected_class]
+            view_df = view_df[view_df.get("classifier_class", view_df["predicted_class"]).astype(str) == selected_class]
         view_df = view_df[view_df["hybrid_score"] >= min_score].copy()
         view_df["risk"] = view_df.apply(lambda r: risk_score({
             "hybrid_score": r.get("hybrid_score", 0),
@@ -1260,7 +1419,7 @@ elif page == "[3] Zero-Day Logs":
                 st.info("Khong co log nao khop filter hien tai.")
             else:
                 display_cols = [c for c in [
-                    "source_row", "detection", "zero_day_family", "predicted_class",
+                    "source_row", "detection", "ground_truth", "correct_vs_ground_truth", "classifier_class",
                     "risk", "hybrid_score", "ae_score", "max_prob", "is_zeroday"
                 ] if c in view_df.columns]
                 try:
@@ -1314,9 +1473,8 @@ elif page == "[3] Zero-Day Logs":
                     "ae_score": row_scores.get("ae_score", 0),
                     "is_zeroday": bool(row_scores.get("is_zeroday", False)),
                 }, "HIGH" if row_scores.get("is_zeroday") else "MEDIUM")
-                family = str(row_scores.get("zero_day_family") or "Unknown")
-                classifier_class = str(row_scores.get("predicted_class", "Unknown"))
-                detection = str(row_scores.get("detection") or ("Zero-Day / " + family if row_scores.get("is_zeroday") else classifier_class))
+                classifier_class = str(row_scores.get("classifier_class", row_scores.get("predicted_class", "Unknown")))
+                detection = str(row_scores.get("detection") or _traffic_verdict(row_scores.get("is_zeroday"), classifier_class))
                 verdict_badge = "ZERO-DAY" if row_scores.get("is_zeroday") else "KNOWN"
                 badge_class = "soc-pill-red" if row_scores.get("is_zeroday") else "soc-pill-green"
 
@@ -1327,8 +1485,6 @@ elif page == "[3] Zero-Day Logs":
                         <span class="soc-badge soc-pill-blue">row {selected_source_row}</span>
                         <div class="soc-detail-title" style="margin-top:12px;">Detection</div>
                         <div class="soc-detail-value">{detection}</div>
-                        <div class="soc-detail-title">Zero-Day Family / Ground Truth</div>
-                        <div class="soc-detail-value">{family}</div>
                         <div class="soc-detail-title">Known-Class Classifier Output</div>
                         <div class="soc-detail-value">{classifier_class}</div>
                     </div>
@@ -1475,7 +1631,7 @@ elif page == "[4] Ask AI":
             <span class="soc-badge">hybrid {float(last.get('hybrid_score', 0)):.3g}</span>
             <span class="soc-badge">ae {float(last.get('ae_score', 0)):.3g}</span>
             <div class="soc-detail-title" style="margin-top:10px;">Current AI Context</div>
-            <div class="soc-detail-value">{last.get('zero_day_family', last.get('classifier_class', ''))}</div>
+            <div class="soc-detail-value">{last.get('predicted_class', last.get('classifier_class', ''))}</div>
         </div>
         """,
         unsafe_allow_html=True,

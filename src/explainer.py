@@ -111,7 +111,14 @@ class SHAPExplainer:
             if isinstance(shap_vals, list):
                 sv = np.asarray(shap_vals[pred_class]).flatten()
             else:
-                sv = np.asarray(shap_vals).flatten()
+                arr = np.asarray(shap_vals)
+                if arr.ndim == 3:
+                    # SHAP can return (samples, features, outputs) for multi-class models.
+                    sv = arr[0, :, pred_class]
+                elif arr.ndim == 2:
+                    sv = arr[0]
+                else:
+                    sv = arr.flatten()
         else:
             shap_vals  = self.explainer.shap_values(alert_scaled, nsamples=100)
             probs      = self.predict_fn(alert_scaled)[0]
