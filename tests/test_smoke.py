@@ -299,6 +299,41 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertEqual(quality["level"], "LOW")
         self.assertTrue(any("directional" in warning for warning in quality["warnings"]))
 
+    def test_zero_day_vote_decision_requires_multiple_signals(self):
+        from inference_runtime import zero_day_decision
+
+        decision, rule = zero_day_decision(
+            ae_score=[0.9, 0.2],
+            max_prob=[0.4, 0.9],
+            hybrid_score=[0.8, 0.3],
+            thresholds={
+                "decision_mode": "vote",
+                "min_votes": 2,
+                "hybrid": 0.5,
+                "ae_re": 0.5,
+                "softmax": 0.5,
+            },
+        )
+
+        self.assertEqual(rule, "vote_2_of_3")
+        self.assertEqual(decision.tolist(), [True, False])
+
+    def test_batch_evaluator_calibrates_threshold_profile(self):
+        from batch_evaluator import calibrate_thresholds
+
+        scores = pd.DataFrame({
+            "hybrid": [0.1, 0.2, 0.3, 0.4],
+            "ae_re": [0.2, 0.3, 0.4, 0.5],
+            "softmax": [0.05, 0.1, 0.15, 0.2],
+        })
+        raw_df = pd.DataFrame({"label": ["Benign", "Benign", "Attack", "Attack"]})
+
+        profile = calibrate_thresholds(scores, target_fpr=0.5, raw_df=raw_df)
+
+        self.assertEqual(profile["thresholds"]["decision_mode"], "vote")
+        self.assertEqual(profile["reference_rows"], 2)
+        self.assertIn("hybrid", profile["thresholds"])
+
     def test_llm_agent_import_has_no_provider_side_effect(self):
         sys.modules.pop("llm_agent", None)
         buf = StringIO()

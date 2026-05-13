@@ -258,6 +258,7 @@ DEFAULT_PIPE = f"ids_{MODEL_VERSION}_pipeline.pkl"
 MODEL_PATH = os.getenv("IDS_MODEL_PATH", os.path.join(CKPT_DIR, DEFAULT_MODEL))
 PIPE_PATH = os.getenv("IDS_PIPELINE_PATH", os.path.join(CKPT_DIR, DEFAULT_PIPE))
 DATA_PATH = os.getenv("IDS_SAMPLE_DATA_PATH", os.path.join(DATA_DIR, 'UNSW_NB15_training-set.csv'))
+THRESHOLD_PROFILE_PATH = os.getenv("IDS_THRESHOLD_PROFILE", os.path.join(CKPT_DIR, "local_thresholds.json"))
 
 # CLASS_NAMES se duoc load tu label_encoder sau khi model load
 # De tranh sai thu tu do LabelEncoder sort theo alphabet
@@ -266,6 +267,16 @@ AE_THRESHOLD = 0.5
 HYBRID_THRESHOLD = 0.5
 PIPELINE_THRESHOLDS = None
 PIPELINE_META = {}
+
+def _load_threshold_profile(path: str) -> dict | None:
+    if not path or not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        profile = json.load(f)
+    thresholds = profile.get("thresholds")
+    if not isinstance(thresholds, dict):
+        raise ValueError("threshold profile missing thresholds dict")
+    return profile
 
 def _build_categorical_maps_from_sample() -> dict:
     if not os.path.exists(DATA_PATH):
@@ -416,8 +427,17 @@ def load_model():
                 st.warning(f"[Artifact] {warning}")
             validation.raise_for_errors()
 
-        PIPELINE_THRESHOLDS = pipeline.get('thresholds')
+        PIPELINE_THRESHOLDS = dict(pipeline.get('thresholds') or {})
         PIPELINE_META = pipeline
+        threshold_profile = _load_threshold_profile(THRESHOLD_PROFILE_PATH)
+        if threshold_profile is not None:
+            PIPELINE_THRESHOLDS.update(threshold_profile["thresholds"])
+            PIPELINE_META["threshold_profile"] = threshold_profile
+            st.info(
+                "Da load threshold profile: "
+                f"{os.path.basename(THRESHOLD_PROFILE_PATH)} "
+                f"(target FPR={threshold_profile.get('target_fpr', 'N/A')})"
+            )
 
         scaler        = pipeline['scaler']
         feature_names = pipeline.get('feature_names', pipeline.get('feat_cols', []))
@@ -1040,12 +1060,15 @@ if page == "[1] Dashboard":
     c3.metric("Zero-Day Hypotheses", zd)
     c4.metric("Average Risk", f"{avg_risk}/100")
     c5.metric("Model Mode", "DEMO" if DEMO_MODE else MODEL_VERSION.upper())
+    threshold_profile = PIPELINE_META.get("threshold_profile") if isinstance(PIPELINE_META, dict) else None
+    threshold_badge = "LOCAL" if threshold_profile else "ARTIFACT"
 
     st.markdown(
         f"""
         <div class="soc-panel">
             <span class="soc-badge">Model: {os.path.basename(MODEL_PATH)}</span>
             <span class="soc-badge">Pipeline: {os.path.basename(PIPE_PATH)}</span>
+            <span class="soc-badge">Thresholds: {threshold_badge}</span>
             <span class="soc-badge">SHAP: {'ON' if HAS_EXPLAINER else 'OFF'}</span>
             <span class="soc-badge">MITRE: {'ON' if HAS_MITRE else 'OFF'}</span>
             <span class="soc-badge">LLM: {'ON' if HAS_LLM and LLM_KEY_OK else 'OFF'}</span>

@@ -11,6 +11,19 @@ def zero_day_decision(
     ae_threshold: float = 0.5,
     hybrid_threshold: float = 0.5,
 ):
+    if thresholds and thresholds.get("decision_mode") == "vote":
+        min_votes = int(thresholds.get("min_votes", 2))
+        votes = []
+        if "hybrid" in thresholds:
+            votes.append(np.asarray(hybrid_score) > float(thresholds["hybrid"]))
+        if "ae_re" in thresholds:
+            votes.append(np.asarray(ae_score) > float(thresholds["ae_re"]))
+        if "softmax" in thresholds:
+            votes.append((1.0 - np.asarray(max_prob)) > float(thresholds["softmax"]))
+        if votes:
+            vote_count = np.sum(np.stack(votes, axis=0), axis=0)
+            return vote_count >= min_votes, f"vote_{min_votes}_of_{len(votes)}"
+
     if thresholds and "hybrid" in thresholds:
         return np.asarray(hybrid_score) > hybrid_threshold, "hybrid_calibrated"
     return (np.asarray(ae_score) > ae_threshold) & (np.asarray(max_prob) < 0.6), "ae_plus_confidence_fallback"
