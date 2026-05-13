@@ -1,30 +1,66 @@
-# export_model.py
-# Dat file nay trong: ZeroDay-Detection-AutoEncoder-IDS/
-# Chay: python export_model.py
+from __future__ import annotations
 
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+import argparse
+import os
+import sys
+from types import SimpleNamespace
 
-from ids_v14_unswnb15 import CFG, run_full
 
-# Output vao dung project hien tai
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+ROOT_DIR = os.path.abspath(os.path.dirname(__file__))
+SRC_DIR = os.path.join(ROOT_DIR, "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
-CFG.save_dir = os.path.join(BASE_DIR, "checkpoints")
-CFG.plot_dir = os.path.join(BASE_DIR, "plots")
-CFG.data_dir = os.path.join(BASE_DIR, "data", "quick_train") # Chay tren dataset nho cho nhanh
-CFG.demo     = False  # Train tren data that, KHONG phai data gia lap!
-CFG.epochs   = 5
-CFG.patience = 3
+from ids_v14_unswnb15 import CFG, run_full  # noqa: E402
 
-CFG.num_workers = 0 # Fix PyTorch Windows multiprocessing crash
 
-os.makedirs(CFG.save_dir, exist_ok=True)
-os.makedirs(CFG.plot_dir, exist_ok=True)
+def build_config(args: argparse.Namespace) -> SimpleNamespace:
+    config = {
+        key: value
+        for key, value in vars(CFG).items()
+        if not key.startswith("_") and not callable(value)
+    }
+    config.update(
+        {
+            "data_dir": args.data_dir,
+            "save_dir": args.save_dir,
+            "plot_dir": args.plot_dir,
+            "epochs": args.epochs,
+            "patience": args.patience,
+            "batch_size": args.batch_size,
+            "num_workers": args.num_workers,
+            "demo": args.demo,
+            "seed": args.seed,
+        }
+    )
+    return SimpleNamespace(**config)
 
-if __name__ == '__main__':
-    print("Dang train model bang du lieu THAT (UNSW-NB15) de tuong thich voi Dashboard...")
-    run_full(CFG)
 
-    print("\n=== XONG ===")
-    print(f"File da duoc luu tai: {CFG.save_dir}")
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Train/export IDS v14 artifacts for the dashboard.")
+    parser.add_argument("--data_dir", default=os.path.join(ROOT_DIR, "data"))
+    parser.add_argument("--save_dir", default=os.path.join(ROOT_DIR, "checkpoints"))
+    parser.add_argument("--plot_dir", default=os.path.join(ROOT_DIR, "plots"))
+    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--patience", type=int, default=3)
+    parser.add_argument("--batch_size", type=int, default=512)
+    parser.add_argument("--num_workers", type=int, default=0, help="Use 0 on Windows to avoid multiprocessing issues.")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--demo", action="store_true", help="Train on synthetic demo data instead of UNSW-NB15.")
+    args = parser.parse_args()
+
+    os.makedirs(args.save_dir, exist_ok=True)
+    os.makedirs(args.plot_dir, exist_ok=True)
+
+    if not args.demo and not os.path.exists(args.data_dir):
+        raise FileNotFoundError(f"data_dir does not exist: {args.data_dir}")
+
+    config = build_config(args)
+    print(f"Training IDS v14 artifacts from data_dir={config.data_dir}")
+    run_full(config)
+    print(f"Artifacts saved under: {config.save_dir}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

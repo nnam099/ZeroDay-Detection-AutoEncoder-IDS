@@ -132,7 +132,10 @@ sys.path.insert(0, SRC_DIR)
 
 # ── Kiem tra thu vien can thiet ───────────────────────────────────
 def _has_module(name: str) -> bool:
-    return importlib.util.find_spec(name) is not None
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, AttributeError, ValueError):
+        return False
 
 MISSING_REQUIRED = []
 try:
@@ -213,6 +216,16 @@ try:
 except ImportError:
     HAS_ARTIFACT_VALIDATOR = False
     validate_artifact_contract = None
+
+from inference_runtime import (
+    assess_normalization_quality as runtime_assess_normalization_quality,
+    ground_truth_verdict as runtime_ground_truth_verdict,
+    risk_score as runtime_risk_score,
+    severity_class as runtime_severity_class,
+    severity_rank as runtime_severity_rank,
+    traffic_verdict as runtime_traffic_verdict,
+    zero_day_decision as runtime_zero_day_decision,
+)
 
 HAS_LLM = False
 if LLM_DEP and HAS_LLM_DEPS:
@@ -443,24 +456,20 @@ def _reset_bulk_results_for_new_file(file_hash: str) -> None:
     st.session_state['current_upload_file_hash'] = file_hash
 
 def _zero_day_decision(ae_score, max_prob, hybrid_score):
-    if PIPELINE_THRESHOLDS and 'hybrid' in PIPELINE_THRESHOLDS:
-        return np.asarray(hybrid_score) > HYBRID_THRESHOLD, 'hybrid_calibrated'
-    return (np.asarray(ae_score) > AE_THRESHOLD) & (np.asarray(max_prob) < 0.6), 'ae_plus_confidence_fallback'
+    return runtime_zero_day_decision(
+        ae_score,
+        max_prob,
+        hybrid_score,
+        thresholds=PIPELINE_THRESHOLDS,
+        ae_threshold=AE_THRESHOLD,
+        hybrid_threshold=HYBRID_THRESHOLD,
+    )
 
 def _traffic_verdict(is_zeroday, classifier_class) -> str:
-    if bool(is_zeroday):
-        return "Zero-Day"
-    if str(classifier_class).strip().lower() == "normal":
-        return "Normal"
-    return "Known-Attack"
+    return runtime_traffic_verdict(is_zeroday, classifier_class)
 
 def _ground_truth_verdict(label) -> str:
-    value = str(label).strip().lower()
-    if value in {"", "nan", "none", "-", "unknown"}:
-        return ""
-    if value in {"0", "benign", "normal"}:
-        return "Normal"
-    return "Known-Attack"
+    return runtime_ground_truth_verdict(label)
 
 def preprocess_raw_df(df_raw: pd.DataFrame, feat_cols: list) -> np.ndarray:
     """
@@ -736,22 +745,13 @@ def run_batch_inference(raw_features: np.ndarray, batch_size: int = 512) -> pd.D
     })
 
 def severity_rank(severity: str) -> int:
-    return {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}.get(str(severity).upper(), 0)
+    return runtime_severity_rank(severity)
 
 def severity_class(severity: str) -> str:
-    return {
-        "CRITICAL": "sev-critical",
-        "HIGH": "sev-high",
-        "MEDIUM": "sev-medium",
-        "LOW": "sev-low",
-    }.get(str(severity).upper(), "sev-medium")
+    return runtime_severity_class(severity)
 
 def risk_score(result: dict, severity: str | None = None) -> int:
-    sev_weight = {"CRITICAL": 35, "HIGH": 25, "MEDIUM": 15, "LOW": 5}.get(str(severity or "").upper(), 10)
-    hybrid = float(result.get("hybrid_score", 0)) * 45
-    ae = min(float(result.get("ae_score", 0)), 1.0) * 15
-    zd = 15 if result.get("is_zeroday") else 0
-    return int(min(100, round(sev_weight + hybrid + ae + zd)))
+    return runtime_risk_score(result, severity)
 
 def render_soc_header(title: str, subtitle: str):
     st.markdown(
@@ -814,7 +814,7 @@ def get_llm_analysis(result: dict, comps: dict):
         }
 
 # ── Display result ────────────────────────────────────────────────
-def display_result(result: dict, llm: dict):
+def _display_result_legacy_unused(result: dict, llm: dict):
     sev_label = {"CRITICAL": "[CRITICAL]", "HIGH": "[HIGH]", "MEDIUM": "[MEDIUM]", "LOW": "[LOW]"}
     sev_color = {"CRITICAL": "red", "HIGH": "orange", "MEDIUM": "yellow", "LOW": "green"}
     sev = llm.get('severity', 'HIGH')
@@ -1228,6 +1228,15 @@ elif page == "[2] Analyze Alert":
                                 st.caption("Missing core features: " + ", ".join(norm_report["missing_core_features"][:12]))
                             if norm_report.get("derived_columns"):
                                 st.caption("Derived features: " + ", ".join(norm_report["derived_columns"][:18]))
+                            quality = runtime_assess_normalization_quality(norm_report)
+                            if quality["level"] in {"LOW", "UNKNOWN"}:
+                                st.warning(quality["message"])
+                            elif quality["level"] == "MEDIUM":
+                                st.info(quality["message"])
+                            else:
+                                st.success(quality["message"])
+                            for warning in quality["warnings"][:4]:
+                                st.caption(warning)
                     if raw.shape[1] == 0 or (raw == 0).all():
                         st.error(
                             "Khong tim thay features hop le trong file CSV nay. "

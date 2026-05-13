@@ -1,5 +1,26 @@
 {
   "version": "v14.0",
-  "status": "not_regenerated_after_operational_fixes",
-  "note": "Run python src/ids_v14_unswnb15.py --data_dir data/ --save_dir checkpoints/ --plot_dir plots/ to regenerate metrics from the current code."
+  "status": "artifact_smoke_verified",
+  "updated_at": "2026-05-13",
+  "verification": {
+    "command": "python scripts/smoke_check.py",
+    "tests": 12,
+    "result": "pass",
+    "checks": [
+      "Python compile for src, dashboard, scripts, export helpers and tests",
+      "artifact contract validator accepts/rejects expected metadata",
+      "artifact contract validator rejects duplicate feature names",
+      "export helper builds training config from CLI overrides",
+      "environment check reports LLM key presence without exposing secret values",
+      "checkpoint patch helper infers hidden dimensions from checkpoint state",
+      "real-world CSV normalizer maps common firewall flow fields",
+      "inference verdict, risk and CSV-quality helpers return expected decisions",
+      "MITRE mapper returns techniques for known attacks",
+      "llm_agent import has no provider/API-key side effect",
+      "llm_agent returns fallback triage when API key/provider is unavailable",
+      "v14 checkpoint and pipeline load with matching feature/class counts"
+    ]
+  },
+  "metrics": null,
+  "note": "Model performance metrics were not regenerated in this verification pass. Run python src/ids_v14_unswnb15.py --data_dir data/ --save_dir checkpoints/ --plot_dir plots/ to retrain and refresh evaluation plots/metrics."
 }

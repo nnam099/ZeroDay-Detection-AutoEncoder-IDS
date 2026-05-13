@@ -1,112 +1,107 @@
 # Zero-Day Detection AutoEncoder IDS
 
-Hệ thống phát hiện xâm nhập mạng dựa trên học sâu cho bộ dữ liệu UNSW-NB15. Project kết hợp phân loại tấn công đã biết, phát hiện bất thường/zero-day bằng reconstruction error, dashboard SOC để phân tích alert, SHAP explainability, MITRE ATT&CK mapping và LLM triage.
+Prototype IDS for UNSW-NB15 research and SOC-style demonstrations. The project combines known-attack classification, reconstruction-error based zero-day/OOD detection, Streamlit dashboard analysis, SHAP explainability, heuristic MITRE ATT&CK mapping and optional LLM triage.
 
-> Mục tiêu của project là nghiên cứu, demo và hỗ trợ phân tích SOC ở mức prototype. Đây không phải IDS production-ready và không thay thế quy trình điều tra thủ công của analyst.
+> This is a research/demo project, not a production IDS. Analyst review and supporting SIEM/firewall/endpoint evidence are still required.
 
-## Tổng Quan
+## Overview
 
-Project tập trung vào bài toán phát hiện traffic bất thường khi mô hình chỉ được huấn luyện trên một nhóm lớp tấn công đã biết. Các lớp còn lại được giữ lại để mô phỏng zero-day/OOD traffic.
+The training pipeline learns from selected known attack classes and holds out other classes to simulate zero-day or out-of-distribution traffic. The dashboard loads saved artifacts and supports both single-alert analysis and CSV batch uploads.
 
-Luồng chính:
+Main flow:
 
-1. Tiền xử lý dữ liệu UNSW-NB15 và chuẩn hóa feature.
-2. Huấn luyện mô hình hybrid gồm supervised classifier, contrastive representation và autoencoder/VAE.
-3. Hiệu chỉnh ngưỡng phát hiện zero-day trên validation set.
-4. Lưu artifact gồm model weights, scaler, label encoder, feature list và thresholds.
-5. Dashboard Streamlit dùng artifact để phân tích single alert hoặc CSV batch.
-6. SHAP, MITRE mapping và LLM được dùng như lớp hỗ trợ giải thích, không phải nguồn quyết định cuối cùng.
+1. Load and clean UNSW-NB15 CSV files.
+2. Engineer flow features and encode categorical fields.
+3. Train a hybrid supervised classifier + contrastive representation + autoencoder model.
+4. Calibrate anomaly/zero-day thresholds.
+5. Save checkpoint and preprocessing pipeline artifacts.
+6. Analyze alerts in the Streamlit dashboard.
+7. Attach SHAP, MITRE and optional LLM context for SOC triage.
 
-## Tính Năng Chính
+## Current Status
 
-- **Known-attack classification**: phân loại các lớp đã biết như `Normal`, `DoS`, `Exploits`, `Reconnaissance`, `Generic`.
-- **Zero-day/OOD detection**: dùng reconstruction error, confidence score và hybrid threshold để đánh dấu traffic bất thường.
-- **SOC dashboard**: giao diện Streamlit cho phân tích alert, upload CSV, xem score, verdict, risk và lịch sử alert.
-- **Real-world CSV normalization**: hỗ trợ chuẩn hóa một số CSV flow/firewall/Zeek/Suricata về schema gần UNSW-NB15.
-- **Explainability**: SHAP top features giúp analyst xem yếu tố nào ảnh hưởng đến alert.
-- **MITRE ATT&CK mapping**: ánh xạ heuristic từ class/feature sang kỹ thuật ATT&CK để hỗ trợ triage.
-- **LLM triage**: tích hợp tùy chọn với Groq, Gemini, OpenAI hoặc Anthropic để tạo nhận định dạng SOC.
-- **Smoke tests**: kiểm tra nhanh normalizer, MITRE mapper và khả năng load artifact v14.
+- v14 is the operational default because local artifacts exist in `checkpoints/`.
+- `scripts/smoke_check.py` passes locally with 12 tests.
+- Smoke coverage includes artifact contract validation, duplicate feature-name rejection, environment readiness checks, export config handling, checkpoint metadata patch logic, CSV normalization quality checks, MITRE mapping, LLM import/fallback behavior and v14 artifact loading.
+- `llm_agent.py` lazy-loads provider clients, so importing dashboard code does not require an API key.
+- A Windows GitHub Actions smoke workflow is available at `.github/workflows/smoke.yml`.
+- v14 performance metrics have not been regenerated after the latest operational fixes; `results/ids_v14_results.json` records artifact smoke verification only.
 
-## Kiến Trúc Mô Hình
+## Features
 
-### v14 - Bản vận hành mặc định
+- Known-attack classification for classes such as `Normal`, `DoS`, `Exploits`, `Reconnaissance` and `Generic`.
+- Zero-day/OOD detection using reconstruction error, classifier confidence and calibrated hybrid thresholds.
+- Streamlit SOC dashboard for single alert review, CSV batch analysis, alert history and AI follow-up.
+- Real-world CSV normalization for common firewall/flow/Zeek/Suricata-like exports.
+- SHAP top-feature explanation.
+- Heuristic MITRE ATT&CK mapping.
+- Optional LLM triage through Groq, Gemini, OpenAI or Anthropic.
 
-`v14` là phiên bản mặc định vì repo hiện có sẵn artifact tương ứng trong `checkpoints/`.
-
-Thành phần chính:
-
-- `IDSBackbone`: Linear projection, LayerNorm, GELU và residual blocks.
-- `classifier`: supervised head cho known classes.
-- `proj_head`: projection head phục vụ contrastive representation.
-- `autoencoder`: học tái tạo feature để tính anomaly/reconstruction error.
-- `hybrid detector`: kết hợp classifier confidence và autoencoder score để phát hiện zero-day.
-
-Loss tổng:
-
-```text
-FocalLoss + lambda_con * SupConLoss + lambda_ae * AE_MSE
-```
-
-### v15 - Bản thử nghiệm
-
-`v15` mở rộng v14 với VAE, Attention Gate, KNN/OOD ensemble và YAML config. Muốn dùng dashboard với v15 cần train/export artifact v15 trước.
-
-## Cấu Trúc Thư Mục
+## Repository Layout
 
 ```text
 src/
   ids_v14_unswnb15.py      # train/evaluate/export pipeline v14
-  ids_v15_unswnb15.py      # train/evaluate/export pipeline v15
+  ids_v15_unswnb15.py      # experimental v15 pipeline
+  inference_runtime.py     # pure verdict/zero-day/risk/CSV-quality helpers used by dashboard
+  artifact_validator.py    # checkpoint/pipeline contract validation
   explainer.py             # SHAP explainer
+  log_normalizer.py        # real-world CSV normalization
   mitre_mapper.py          # heuristic MITRE ATT&CK mapping
-  log_normalizer.py        # normalize CSV log thực tế về schema flow gần UNSW
-  llm_agent.py             # wrapper cho các LLM provider
+  llm_agent.py             # optional lazy-loaded LLM triage
 dashboard/
   app.py                   # Streamlit SOC dashboard
 configs/
-  config_default.yaml      # cấu hình mặc định cho v15
+  config_default.yaml      # default v15 config
 docs/
-  architecture.md          # ghi chú kiến trúc
-  real_world_csv.md        # hướng dẫn CSV log thực tế
-  project_audit.md         # audit kỹ thuật hiện tại
+  architecture.md
+  real_world_csv.md
+  project_audit.md
 tests/
-  test_smoke.py            # smoke tests
+  test_smoke.py
 scripts/
-  train.sh                 # train v14
-  train_v15.sh             # train v15
-data/                      # dữ liệu local, không commit
-checkpoints/               # model/pipeline artifacts, không commit
-plots/                     # biểu đồ đánh giá
-results/                   # metric summary
+  check_environment.py
+  smoke_check.py
+  install_requirements.ps1
+  train_v14.ps1
+  train_v15.ps1
+  train.sh
+  train_v15.sh
 ```
 
-## Cài Đặt
+## Setup
 
-Yêu cầu khuyến nghị:
+Recommended:
 
-- Python 3.9+
-- PyTorch
-- scikit-learn, pandas, numpy, matplotlib
-- Streamlit nếu chạy dashboard
-- SHAP và LLM provider SDK nếu dùng các tính năng tùy chọn
+- Python 3.9+ for local work. Python 3.11 is used by CI.
+- Windows PowerShell or a Unix-like shell.
 
-Cài dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-Nếu dùng Windows PowerShell với virtual environment:
+Create/activate a virtual environment, then install dependencies:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+.\scripts\install_requirements.ps1
 ```
 
-## Dữ Liệu
+Manual install:
 
-Project dùng UNSW-NB15. Đặt các file CSV trong thư mục `data/`, ví dụ:
+```powershell
+$env:PYTHONUTF8="1"
+$env:PYTHONIOENCODING="utf-8"
+python -m pip install --progress-bar off -r requirements.txt
+```
+
+Minimal dependencies for smoke checks only:
+
+```powershell
+python -m pip install --progress-bar off -r requirements-smoke.txt
+```
+
+The UTF-8 environment variables avoid console encoding failures when the project path contains Vietnamese characters.
+
+## Data
+
+Place UNSW-NB15 CSV files in `data/`, for example:
 
 ```text
 data/
@@ -118,39 +113,31 @@ data/
   UNSW_NB15_testing-set.csv
 ```
 
-`data/` được gitignore vì kích thước lớn và thường chứa dữ liệu local.
+`data/` is ignored by git because it is large and local.
 
-Dashboard cũng hỗ trợ upload một số CSV flow/firewall phổ biến. Xem thêm [docs/real_world_csv.md](docs/real_world_csv.md).
+## Run Dashboard
 
-## Chạy Dashboard
-
-Mặc định dashboard dùng `v14`:
-
-```bash
-streamlit run dashboard/app.py
-```
-
-PowerShell:
+Default dashboard mode uses v14:
 
 ```powershell
 $env:IDS_MODEL_VERSION="v14"
 streamlit run dashboard/app.py
 ```
 
-Các biến môi trường quan trọng:
+Important environment variables:
 
-| Biến | Ý nghĩa |
-|------|---------|
-| `IDS_MODEL_VERSION` | `v14` hoặc `v15` |
-| `IDS_MODEL_PATH` | Đường dẫn file `.pth` |
-| `IDS_PIPELINE_PATH` | Đường dẫn file `.pkl` |
-| `IDS_DATA_DIR` | Thư mục chứa dữ liệu |
-| `IDS_SAMPLE_DATA_PATH` | CSV mẫu dùng trong dashboard |
-| `LLM_PROVIDER` | `groq`, `gemini`, `openai` hoặc `anthropic` |
+| Variable | Meaning |
+| --- | --- |
+| `IDS_MODEL_VERSION` | `v14` or `v15` |
+| `IDS_MODEL_PATH` | Path to model `.pth` |
+| `IDS_PIPELINE_PATH` | Path to pipeline `.pkl` |
+| `IDS_DATA_DIR` | Dataset directory |
+| `IDS_SAMPLE_DATA_PATH` | Sample CSV path for dashboard |
+| `LLM_PROVIDER` | `groq`, `gemini`, `openai` or `anthropic` |
 
-Nếu thiếu model hoặc pipeline, dashboard sẽ chuyển sang demo mode.
+If model or pipeline artifacts are missing, the dashboard falls back to demo mode.
 
-## Huấn Luyện
+## Train
 
 Train v14:
 
@@ -158,83 +145,68 @@ Train v14:
 python src/ids_v14_unswnb15.py --data_dir data/ --save_dir checkpoints/ --plot_dir plots/
 ```
 
-Train v15:
+PowerShell launcher:
 
-```bash
-python src/ids_v15_unswnb15.py --data_dir data/ --save_dir checkpoints/ --plot_dir plots/
+```powershell
+.\scripts\train_v14.ps1
 ```
 
-Train v15 với config YAML:
+Quick export helper for dashboard artifacts:
+
+```bash
+python export_model.py --data_dir data --epochs 5 --patience 3
+```
+
+Train v15:
 
 ```bash
 python src/ids_v15_unswnb15.py --config configs/config_default.yaml
 ```
 
-Sau khi train, project lưu:
+PowerShell launcher:
 
-- model weights `.pth`
-- pipeline `.pkl` gồm scaler, label encoder, feature names, categorical maps và thresholds
-- plots đánh giá trong `plots/`
-- metric summary trong `results/`
-
-## Kiểm Tra Nhanh
-
-```bash
-python -m compileall src dashboard export_model.py patch_checkpoint.py tests
-python -m unittest discover -s tests
+```powershell
+.\scripts\train_v15.ps1
 ```
 
-Hoặc chạy gộp:
+Training outputs:
 
-```bash
+- model weights `.pth`
+- pipeline `.pkl`
+- plots in `plots/`
+- metric summary in `results/`
+
+## Verify
+
+Check local environment and artifact availability:
+
+```powershell
+python scripts/check_environment.py
+```
+
+Run the full smoke check:
+
+```powershell
+$env:PYTHONUTF8="1"
+$env:PYTHONIOENCODING="utf-8"
 python scripts/smoke_check.py
 ```
 
-Smoke tests sẽ skip phần load artifact nếu checkpoint/pipeline không tồn tại trên máy hiện tại.
+Or run commands separately:
 
-## LLM Triage
-
-LLM là tùy chọn. Tạo file `.env` ở thư mục gốc và khai báo provider/key tương ứng:
-
-```env
-LLM_PROVIDER=groq
-GROQ_API_KEY=your_api_key
+```bash
+python -m compileall src dashboard scripts export_model.py patch_checkpoint.py tests
+python -m unittest discover -s tests
 ```
 
-Provider hỗ trợ trong code:
+## Limitations
 
-- `groq`
-- `gemini`
-- `openai`
-- `anthropic`
-
-LLM output chỉ dùng để hỗ trợ giải thích alert. Analyst vẫn cần xác minh bằng log, endpoint telemetry, SIEM/firewall evidence và context vận hành thực tế.
-
-## Giới Hạn
-
-- Mapping MITRE hiện là heuristic, chưa phải threat intelligence đầy đủ.
-- Kết quả zero-day phụ thuộc mạnh vào chất lượng feature, scaler và threshold calibration.
-- CSV thực tế được normalizer chuyển đổi xấp xỉ về schema UNSW; nếu thiếu directional counters hoặc timing fields, độ tin cậy inference sẽ thấp hơn.
-- Artifact v14 là bản vận hành mặc định; v15 cần được train/export riêng trước khi dùng ổn định.
-- Project chưa bao gồm CI/CD, deployment hardening, authentication dashboard hoặc realtime packet capture.
-
-## Bảo Mật Và Git Hygiene
-
-Không commit các file/thư mục sau:
-
-- `.env`
-- `data/`
-- `checkpoints/`
-- `.venv/`
-- `__pycache__/`
-- file `.pyc`
-
-## Trạng Thái Hiện Tại
-
-- Branch chính đã có dashboard chạy được với v14 artifact.
-- Smoke tests hiện pass cho normalizer, MITRE mapper và v14 artifact loading.
-- Dashboard đã cập nhật API Streamlit mới: dùng `width="stretch"` thay cho `use_container_width`.
+- MITRE mapping is heuristic and should be treated as triage support.
+- Zero-day results depend strongly on feature quality, scaler compatibility and threshold calibration.
+- Real-world CSV normalization is approximate when directional counters or timing fields are missing.
+- v15 is experimental until v15 artifacts are trained/exported and smoke-tested.
+- The dashboard is not hardened for production deployment: no authentication, no realtime packet capture and no deployment security controls.
 
 ## License
 
-Xem [LICENSE](LICENSE).
+See [LICENSE](LICENSE).

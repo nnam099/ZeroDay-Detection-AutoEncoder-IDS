@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -49,6 +50,13 @@ def validate_artifact_contract(checkpoint: dict[str, Any], pipeline: dict[str, A
         result.errors.append(
             f"feature count mismatch: checkpoint.n_features={n_features}, pipeline features={len(feature_names)}"
         )
+    elif feature_names:
+        normalized_features = [str(name).strip() for name in feature_names]
+        if any(not name for name in normalized_features):
+            result.errors.append("pipeline feature_names/feat_cols must not contain empty names")
+        duplicates = sorted(name for name, count in Counter(normalized_features).items() if count > 1)
+        if duplicates:
+            result.errors.append("pipeline feature_names/feat_cols contains duplicates: " + ", ".join(duplicates[:5]))
 
     label_encoder = pipeline.get("label_encoder")
     label_classes = getattr(label_encoder, "classes_", None)

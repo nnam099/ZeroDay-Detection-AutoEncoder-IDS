@@ -1,34 +1,46 @@
 # Project Audit
 
-Ngày cập nhật: 2026-05-13
+Updated: 2026-05-13
 
-## Đã xác minh
+## Verified
 
-- Python compile pass cho `src/`, `dashboard/`, `export_model.py`, `patch_checkpoint.py` và `tests/`.
-- Checkpoint `ids_v14_model.pth` load được vào `IDSModel` v14, không có missing/unexpected weights.
-- Pipeline v14 có 61 features, khớp `n_features` trong checkpoint.
-- `log_normalizer.py` có thể map CSV firewall/flow có cột phổ biến sang schema flow gần UNSW.
-- Dashboard hiện validate contract giữa checkpoint và pipeline trước khi inference.
-- Có `scripts/smoke_check.py` để chạy compile + unittest bằng một lệnh.
+- `scripts/smoke_check.py` now runs with UTF-8 subprocess settings, so it works on Windows paths containing Vietnamese characters.
+- Python compile passes for `src/`, `dashboard/`, `export_model.py`, `patch_checkpoint.py` and `tests/`.
+- Smoke tests pass locally: 12 tests.
+- Checkpoint `ids_v14_model.pth` loads into `IDSModel` v14 without missing or unexpected weights.
+- Pipeline v14 has 61 features and matches `n_features` in the checkpoint.
+- `log_normalizer.py` maps common firewall/flow CSV columns into an UNSW-like flow schema.
+- Dashboard validates the checkpoint/pipeline contract before inference.
+- Pure inference verdict/risk/CSV-quality helpers are split into `src/inference_runtime.py` and covered by smoke tests.
+- `llm_agent.py` no longer initializes the provider client on import; it initializes lazily when LLM output is requested.
+- `patch_checkpoint.py` now validates checkpoint structure, accepts a path argument and creates a backup by default.
+- `artifact_validator.py` rejects duplicate or empty feature names in pipeline metadata.
+- `export_model.py` now exposes a CLI instead of hard-coding `data/quick_train`.
+- PowerShell train launchers are available for v14 and v15.
+- CI uses `requirements-smoke.txt` so optional dashboard/explainability packages do not slow down core smoke checks.
+- `scripts/check_environment.py` reports package/artifact/data readiness without exposing secret values.
+- A Windows GitHub Actions smoke workflow is available in `.github/workflows/smoke.yml`.
 
-## Điểm mạnh
+## Strengths
 
-- Có tách rõ train/inference/dashboard theo module.
-- Artifact v14 lưu đủ metadata cần thiết: scaler, label encoder, feature list, thresholds.
-- Dashboard có fallback demo mode khi thiếu artifact và hỗ trợ CSV log thực tế qua normalizer.
-- MITRE mapping được đóng gói riêng, dễ mở rộng rule/evidence sau này.
+- Training, inference support modules and dashboard are separated at the folder level.
+- Artifact v14 stores the metadata needed for inference: scaler, label encoder, feature list and thresholds.
+- Dashboard has demo fallback when artifacts are missing and supports common real-world CSV uploads through the normalizer.
+- MITRE mapping is packaged separately and is easy to extend with more techniques/evidence rules.
+- Smoke tests cover the highest-risk runtime contracts: artifact compatibility, duplicate feature metadata rejection, environment readiness reporting, export config handling, checkpoint metadata patching, normalizer behavior, CSV quality classification, MITRE mapping and LLM import/fallback behavior.
 
-## Rủi ro hiện tại
+## Current Risks
 
-- Nhiều file code đang có comment/docstring hiển thị mojibake trong một số terminal Windows, gây khó đọc khi báo cáo hoặc bảo trì.
-- Đã có artifact contract validator cơ bản cho checkpoint/pipeline; vẫn cần mở rộng sang validation dữ liệu upload theo từng schema.
-- `v15` là nhánh thử nghiệm nhưng dashboard mặc định v14; nếu chọn v15 khi chưa train artifact sẽ fallback/demo.
-- LLM provider là optional nhưng dependency provider chưa nằm trong requirements mặc định; cần cài đúng thư viện theo provider.
+- `dashboard/app.py` is still a large file. Some verdict/risk helpers have been split out, but preprocessing, batch inference, UI and LLM workflow should be split further for unit testing.
+- Some code comments/docstrings still contain mojibake from earlier encoding issues.
+- v14 artifact compatibility is verified, but full model performance metrics have not been regenerated after the latest operational fixes.
+- v15 is experimental. The dashboard can select it, but stable v15 use requires separately trained/exported artifacts.
+- LLM provider packages remain optional and are not installed unless the selected provider is needed.
 
-## Ưu tiên tiếp theo
+## Next Priorities
 
-1. Sửa mojibake trong comment/docstring chính nếu cần trình bày code trong báo cáo.
-2. Tách inference logic khỏi `dashboard/app.py` sang module riêng để test được mà không phụ thuộc Streamlit.
-3. Thêm validation dữ liệu upload: cảnh báo coverage thấp, thiếu directional counters hoặc schema không rõ.
-4. Thêm CI job chạy `scripts/smoke_check.py`.
-5. Nếu tiếp tục v15, train/export artifact v15 riêng và thêm smoke test load v15 tương tự v14.
+1. Move dashboard preprocessing and batch inference into testable runtime modules.
+2. Regenerate v14 metrics/plots from the current code and update `results/ids_v14_results.json`.
+3. Fix remaining mojibake in source comments/docstrings that are used in reports or presentations.
+4. Add schema-quality warnings for uploaded CSVs with low feature coverage or missing directional counters.
+5. Train/export v15 artifacts and add v15 artifact smoke tests if v15 will be demonstrated.

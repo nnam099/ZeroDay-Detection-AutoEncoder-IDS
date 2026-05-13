@@ -1,4 +1,4 @@
-# IDS v15.0 — Dependencies
+# IDS v15.0 - dependencies
 torch>=2.0
 numpy>=1.24
 pandas>=1.5
@@ -6,16 +6,16 @@ scikit-learn>=1.2
 matplotlib>=3.7
 pyyaml>=6.0
 
-# Optional — dashboard & explainability
+# Optional - dashboard and explainability
 streamlit>=1.30
 shap>=0.43
 python-dotenv>=1.0
 
-# Optional — LLM providers (chọn 1)
+# Optional - LLM providers. Install one provider package only when needed.
 # groq
 # google-generativeai
 # openai
 # anthropic
 
-# Optional — MITRE
+# Optional - MITRE
 # mitreattack-python
