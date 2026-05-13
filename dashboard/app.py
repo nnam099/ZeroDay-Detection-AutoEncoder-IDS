@@ -228,6 +228,7 @@ from inference_runtime import (
     assess_normalization_quality as runtime_assess_normalization_quality,
     ground_truth_verdict as runtime_ground_truth_verdict,
     risk_score as runtime_risk_score,
+    run_batch_inference as runtime_run_batch_inference,
     severity_class as runtime_severity_class,
     severity_rank as runtime_severity_rank,
     traffic_verdict as runtime_traffic_verdict,
@@ -712,64 +713,16 @@ def run_full_pipeline(raw_features: np.ndarray, comps: dict):
 
 def run_batch_inference(raw_features: np.ndarray, batch_size: int = 512) -> pd.DataFrame:
     """Chay inference cho toan bo file CSV (khong SHAP/LLM)."""
-    if model is None or scaler is None:
-        return pd.DataFrame()
-    if raw_features is None or len(raw_features) == 0:
-        return pd.DataFrame()
-
-    scaled = scaler.transform(raw_features)
-    tensor = torch.FloatTensor(scaled)
-    probs_all = []
-    ae_all = []
-
-    with torch.no_grad():
-        for i in range(0, len(tensor), batch_size):
-            x = tensor[i:i+batch_size]
-            outputs = model(x)
-            logits = outputs[0] if isinstance(outputs, tuple) else outputs
-            probs = torch.softmax(logits, dim=1).cpu().numpy()
-            probs_all.append(np.atleast_2d(probs))
-
-            if hasattr(model, 'ae'):
-                ae_score = model.ae.recon_error(x)
-                if isinstance(ae_score, torch.Tensor):
-                    ae_score = ae_score.cpu().numpy()
-            elif hasattr(model, 'vae'):
-                ae_score = model.vae.recon_error(x)
-                if isinstance(ae_score, torch.Tensor):
-                    ae_score = ae_score.cpu().numpy()
-            elif hasattr(model, 'autoencoder'):
-                recon = model.autoencoder(x)
-                ae_score = torch.mean((x - recon) ** 2, dim=-1).cpu().numpy()
-            else:
-                ae_score = (1.0 - probs.max(axis=1))
-
-            ae_score = np.atleast_1d(ae_score)
-            if ae_score.ndim == 0 or ae_score.shape[0] != len(x):
-                ae_score = np.full(len(x), float(np.mean(ae_score)), dtype=np.float32)
-            ae_all.append(ae_score)
-
-    if not probs_all or not ae_all:
-        return pd.DataFrame()
-
-    probs_all = np.concatenate(probs_all, axis=0)
-    ae_all = np.concatenate(ae_all, axis=0)
-    max_prob = probs_all.max(axis=1)
-    pred_idx = probs_all.argmax(axis=1)
-    pred_class = [CLASS_NAMES[i] if i < len(CLASS_NAMES) else "Unknown" for i in pred_idx]
-    hybrid_score = 0.5 * ae_all + 0.5 * (1 - max_prob)
-    is_zeroday, decision_rule = _zero_day_decision(ae_all, max_prob, hybrid_score)
-    verdict = [_traffic_verdict(zd, cls) for zd, cls in zip(is_zeroday, pred_class)]
-
-    return pd.DataFrame({
-        "predicted_class": verdict,
-        "classifier_class": pred_class,
-        "max_prob": max_prob,
-        "ae_score": ae_all,
-        "hybrid_score": hybrid_score,
-        "is_zeroday": is_zeroday.astype(bool),
-        "zero_day_rule": decision_rule,
-    })
+    return runtime_run_batch_inference(
+        model,
+        scaler,
+        raw_features,
+        CLASS_NAMES,
+        thresholds=PIPELINE_THRESHOLDS,
+        ae_threshold=AE_THRESHOLD,
+        hybrid_threshold=HYBRID_THRESHOLD,
+        batch_size=batch_size,
+    )
 
 def severity_rank(severity: str) -> int:
     return runtime_severity_rank(severity)

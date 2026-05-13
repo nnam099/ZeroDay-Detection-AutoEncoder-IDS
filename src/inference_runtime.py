@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
+import torch
 
 
 def zero_day_decision(
@@ -25,8 +27,93 @@ def zero_day_decision(
             return vote_count >= min_votes, f"vote_{min_votes}_of_{len(votes)}"
 
     if thresholds and "hybrid" in thresholds:
-        return np.asarray(hybrid_score) > hybrid_threshold, "hybrid_calibrated"
+        calibrated_threshold = float(thresholds.get("hybrid", hybrid_threshold))
+        return np.asarray(hybrid_score) > calibrated_threshold, "hybrid_calibrated"
     return (np.asarray(ae_score) > ae_threshold) & (np.asarray(max_prob) < 0.6), "ae_plus_confidence_fallback"
+
+
+def _autoencoder_reconstruction_error(model, x, probs):
+    if hasattr(model, "ae"):
+        ae_score = model.ae.recon_error(x)
+    elif hasattr(model, "vae"):
+        ae_score = model.vae.recon_error(x)
+    elif hasattr(model, "autoencoder"):
+        recon = model.autoencoder(x)
+        ae_score = torch.mean((x - recon) ** 2, dim=-1)
+    else:
+        ae_score = 1.0 - probs.max(axis=1)
+
+    if isinstance(ae_score, torch.Tensor):
+        ae_score = ae_score.detach().cpu().numpy()
+    ae_score = np.atleast_1d(ae_score).astype(np.float32)
+    if ae_score.ndim == 0 or ae_score.shape[0] != len(x):
+        ae_score = np.full(len(x), float(np.mean(ae_score)), dtype=np.float32)
+    return ae_score
+
+
+def run_batch_inference(
+    model,
+    scaler,
+    raw_features,
+    class_names: list[str],
+    thresholds: dict | None = None,
+    ae_threshold: float = 0.5,
+    hybrid_threshold: float = 0.5,
+    batch_size: int = 512,
+) -> pd.DataFrame:
+    """Run classifier and reconstruction scoring for a feature matrix."""
+    if model is None or scaler is None:
+        return pd.DataFrame()
+    if raw_features is None or len(raw_features) == 0:
+        return pd.DataFrame()
+
+    scaled = scaler.transform(raw_features)
+    tensor = torch.as_tensor(scaled, dtype=torch.float32)
+    probs_all = []
+    ae_all = []
+
+    if hasattr(model, "eval"):
+        model.eval()
+
+    with torch.no_grad():
+        for i in range(0, len(tensor), batch_size):
+            x = tensor[i:i + batch_size]
+            outputs = model(x)
+            logits = outputs[0] if isinstance(outputs, tuple) else outputs
+            probs = torch.softmax(logits, dim=1).detach().cpu().numpy()
+            probs = np.atleast_2d(probs)
+            probs_all.append(probs)
+            ae_all.append(_autoencoder_reconstruction_error(model, x, probs))
+
+    if not probs_all or not ae_all:
+        return pd.DataFrame()
+
+    probs_all = np.concatenate(probs_all, axis=0)
+    ae_all = np.concatenate(ae_all, axis=0)
+    max_prob = probs_all.max(axis=1)
+    pred_idx = probs_all.argmax(axis=1)
+    pred_class = [class_names[i] if i < len(class_names) else "Unknown" for i in pred_idx]
+    hybrid_score = 0.5 * ae_all + 0.5 * (1 - max_prob)
+    is_zeroday, decision_rule = zero_day_decision(
+        ae_all,
+        max_prob,
+        hybrid_score,
+        thresholds=thresholds,
+        ae_threshold=ae_threshold,
+        hybrid_threshold=hybrid_threshold,
+    )
+    is_zeroday = np.asarray(is_zeroday).astype(bool)
+    verdict = [traffic_verdict(zd, cls) for zd, cls in zip(is_zeroday, pred_class)]
+
+    return pd.DataFrame({
+        "predicted_class": verdict,
+        "classifier_class": pred_class,
+        "max_prob": max_prob,
+        "ae_score": ae_all,
+        "hybrid_score": hybrid_score,
+        "is_zeroday": is_zeroday,
+        "zero_day_rule": decision_rule,
+    })
 
 
 def traffic_verdict(is_zeroday, classifier_class) -> str:

@@ -6,12 +6,13 @@ Updated: 2026-05-13
 
 - `scripts/smoke_check.py` now runs with UTF-8 subprocess settings, so it works on Windows paths containing Vietnamese characters.
 - Python compile passes for `src/`, `dashboard/`, `export_model.py`, `patch_checkpoint.py` and `tests/`.
-- Smoke tests pass locally: 15 tests.
+- Smoke tests pass locally: 19 tests.
 - Checkpoint `ids_v14_model.pth` loads into `IDSModel` v14 without missing or unexpected weights.
 - Pipeline v14 has 61 features and matches `n_features` in the checkpoint.
 - `log_normalizer.py` maps common firewall/flow CSV columns into an UNSW-like flow schema.
 - Dashboard validates the checkpoint/pipeline contract before inference.
 - Pure inference verdict/risk/CSV-quality helpers are split into `src/inference_runtime.py` and covered by smoke tests.
+- Dashboard batch inference is split into `src/inference_runtime.py` and covered by a dashboard contract smoke test.
 - `llm_agent.py` no longer initializes the provider client on import; it initializes lazily when LLM output is requested.
 - `patch_checkpoint.py` now validates checkpoint structure, accepts a path argument and creates a backup by default.
 - `artifact_validator.py` rejects duplicate/empty feature names and invalid threshold metadata.
@@ -34,7 +35,7 @@ Updated: 2026-05-13
 
 ## Current Risks
 
-- `dashboard/app.py` is still a large file. Some verdict/risk helpers have been split out, but preprocessing, batch inference, UI and LLM workflow should be split further for unit testing.
+- `dashboard/app.py` is still a large file. Some verdict/risk and batch inference helpers have been split out, but preprocessing, UI and LLM workflow should be split further for unit testing.
 - Some code comments/docstrings still contain mojibake from earlier encoding issues.
 - v14 artifact compatibility is verified, but full model performance metrics have not been regenerated after the latest operational fixes.
 - v15 is experimental. The dashboard can select it, but stable v15 use requires separately trained/exported artifacts.
@@ -42,7 +43,7 @@ Updated: 2026-05-13
 
 ## Next Priorities
 
-1. Move dashboard preprocessing and batch inference into testable runtime modules.
+1. Move dashboard preprocessing into a testable runtime module.
 2. Regenerate v14 metrics/plots from the current code and update `results/ids_v14_results.json`.
 3. Fix remaining mojibake in source comments/docstrings that are used in reports or presentations.
 4. Add schema-quality warnings for uploaded CSVs with low feature coverage or missing directional counters.

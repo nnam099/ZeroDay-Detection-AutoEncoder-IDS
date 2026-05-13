@@ -282,6 +282,10 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertTrue(bool(decision))
         self.assertEqual(rule, "hybrid_calibrated")
 
+        decision, rule = zero_day_decision(0.1, 0.9, 0.4, thresholds={"hybrid": 0.3})
+        self.assertTrue(bool(decision))
+        self.assertEqual(rule, "hybrid_calibrated")
+
         self.assertEqual(traffic_verdict(True, "Normal"), "Zero-Day Candidate")
         self.assertEqual(traffic_verdict(False, "Normal"), "Normal")
         self.assertEqual(traffic_verdict(False, "DoS"), "Known-Attack")
@@ -317,6 +321,41 @@ class CoreSmokeTests(unittest.TestCase):
 
         self.assertEqual(rule, "vote_2_of_3")
         self.assertEqual(decision.tolist(), [True, False])
+
+    def test_runtime_batch_inference_returns_dashboard_contract(self):
+        from inference_runtime import run_batch_inference
+
+        class IdentityScaler:
+            def transform(self, values):
+                return values
+
+        class TinyAE:
+            def recon_error(self, x):
+                return x[:, 0]
+
+        class TinyModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.ae = TinyAE()
+
+            def forward(self, x):
+                return torch.stack([x[:, 1], x[:, 2]], dim=1)
+
+        raw = torch.tensor([[0.8, 0.1, 2.0], [0.1, 2.0, 0.1]], dtype=torch.float32).numpy()
+        result = run_batch_inference(
+            TinyModel(),
+            IdentityScaler(),
+            raw,
+            ["Normal", "DoS"],
+            thresholds={"decision_mode": "vote", "min_votes": 2, "hybrid": 0.2, "ae_re": 0.5},
+            batch_size=1,
+        )
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result["classifier_class"].tolist(), ["DoS", "Normal"])
+        self.assertEqual(result["predicted_class"].tolist(), ["Zero-Day Candidate", "Normal"])
+        self.assertEqual(result["is_zeroday"].tolist(), [True, False])
+        self.assertEqual(result["zero_day_rule"].iloc[0], "vote_2_of_2")
 
     def test_batch_evaluator_calibrates_threshold_profile(self):
         from batch_evaluator import calibrate_thresholds
