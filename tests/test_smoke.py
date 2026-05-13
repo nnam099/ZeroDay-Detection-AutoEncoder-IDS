@@ -5,6 +5,7 @@ import unittest
 
 import pandas as pd
 import torch
+from sklearn.preprocessing import LabelEncoder, RobustScaler
 
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -14,6 +15,47 @@ if SRC_DIR not in sys.path:
 
 
 class CoreSmokeTests(unittest.TestCase):
+    def test_artifact_validator_accepts_matching_metadata(self):
+        from artifact_validator import validate_artifact_contract
+
+        checkpoint = {
+            "model_state_dict": {},
+            "n_features": 3,
+            "n_classes": 2,
+            "version": "v14.0",
+            "thresholds": {"hybrid": 0.5},
+        }
+        scaler = RobustScaler().fit([[0, 1, 2], [3, 4, 5]])
+        label_encoder = LabelEncoder().fit(["Normal", "DoS"])
+        pipeline = {
+            "scaler": scaler,
+            "label_encoder": label_encoder,
+            "feature_names": ["dur", "sbytes", "dbytes"],
+            "version": "v14.0",
+        }
+
+        result = validate_artifact_contract(checkpoint, pipeline)
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.errors, [])
+
+    def test_artifact_validator_rejects_feature_mismatch(self):
+        from artifact_validator import validate_artifact_contract
+
+        checkpoint = {"model_state_dict": {}, "n_features": 4, "n_classes": 2}
+        scaler = RobustScaler().fit([[0, 1, 2], [3, 4, 5]])
+        label_encoder = LabelEncoder().fit(["Normal", "DoS"])
+        pipeline = {
+            "scaler": scaler,
+            "label_encoder": label_encoder,
+            "feature_names": ["dur", "sbytes", "dbytes"],
+        }
+
+        result = validate_artifact_contract(checkpoint, pipeline)
+
+        self.assertFalse(result.ok)
+        self.assertTrue(any("feature count mismatch" in err for err in result.errors))
+
     def test_log_normalizer_maps_common_firewall_csv(self):
         from log_normalizer import normalize_real_world_logs
 

@@ -1,0 +1,118 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass
+class ArtifactValidationResult:
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors
+
+    def raise_for_errors(self) -> None:
+        if self.errors:
+            raise ValueError("Invalid IDS artifacts: " + "; ".join(self.errors))
+
+
+def validate_artifact_contract(checkpoint: dict[str, Any], pipeline: dict[str, Any]) -> ArtifactValidationResult:
+    """
+    Validate the model checkpoint and preprocessing pipeline contract before inference.
+
+    This intentionally checks only metadata and object shape contracts. It does not
+    unpickle, load weights, or execute model code.
+    """
+    result = ArtifactValidationResult()
+
+    if not isinstance(checkpoint, dict):
+        result.errors.append("checkpoint must be a dict")
+        return result
+    if not isinstance(pipeline, dict):
+        result.errors.append("pipeline must be a dict")
+        return result
+
+    _require_keys(checkpoint, ["model_state_dict", "n_features", "n_classes"], "checkpoint", result)
+    _require_keys(pipeline, ["scaler", "label_encoder"], "pipeline", result)
+
+    n_features = _positive_int(checkpoint.get("n_features"), "checkpoint.n_features", result)
+    n_classes = _positive_int(checkpoint.get("n_classes"), "checkpoint.n_classes", result)
+
+    feature_names = pipeline.get("feature_names", pipeline.get("feat_cols"))
+    if feature_names is None:
+        result.errors.append("pipeline must include feature_names or feat_cols")
+    elif not isinstance(feature_names, (list, tuple)):
+        result.errors.append("pipeline feature_names/feat_cols must be a list or tuple")
+    elif n_features is not None and len(feature_names) != n_features:
+        result.errors.append(
+            f"feature count mismatch: checkpoint.n_features={n_features}, pipeline features={len(feature_names)}"
+        )
+
+    label_encoder = pipeline.get("label_encoder")
+    label_classes = getattr(label_encoder, "classes_", None)
+    if label_encoder is None:
+        pass
+    elif label_classes is None:
+        result.errors.append("pipeline.label_encoder must expose classes_")
+    elif n_classes is not None and len(label_classes) != n_classes:
+        result.errors.append(
+            f"class count mismatch: checkpoint.n_classes={n_classes}, label_encoder.classes_={len(label_classes)}"
+        )
+
+    scaler = pipeline.get("scaler")
+    scaler_n_features = getattr(scaler, "n_features_in_", None)
+    if scaler is None:
+        pass
+    elif scaler_n_features is not None and n_features is not None and int(scaler_n_features) != n_features:
+        result.errors.append(
+            f"scaler feature mismatch: scaler.n_features_in_={scaler_n_features}, checkpoint.n_features={n_features}"
+        )
+
+    thresholds = pipeline.get("thresholds", checkpoint.get("thresholds"))
+    if thresholds is None:
+        result.warnings.append("thresholds are missing; dashboard will use fallback zero-day rule")
+    elif not isinstance(thresholds, dict):
+        result.errors.append("thresholds must be a dict when present")
+    elif not any(k in thresholds for k in ("hybrid", "ae_re", "vae_recon", "ood_ensemble")):
+        result.warnings.append("thresholds do not include a recognized zero-day score key")
+
+    checkpoint_version = checkpoint.get("version")
+    pipeline_version = pipeline.get("version")
+    if checkpoint_version and pipeline_version:
+        ckpt_family = _version_family(str(checkpoint_version))
+        pipe_family = _version_family(str(pipeline_version))
+        if ckpt_family and pipe_family and ckpt_family != pipe_family:
+            result.warnings.append(
+                f"artifact version family differs: checkpoint={checkpoint_version}, pipeline={pipeline_version}"
+            )
+
+    return result
+
+
+def _require_keys(obj: dict[str, Any], keys: list[str], name: str, result: ArtifactValidationResult) -> None:
+    for key in keys:
+        if key not in obj:
+            result.errors.append(f"{name} missing required key: {key}")
+
+
+def _positive_int(value: Any, name: str, result: ArtifactValidationResult) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        result.errors.append(f"{name} must be an integer")
+        return None
+    if parsed <= 0:
+        result.errors.append(f"{name} must be positive")
+        return None
+    return parsed
+
+
+def _version_family(version: str) -> str:
+    version = version.lower()
+    if "v14" in version:
+        return "v14"
+    if "v15" in version:
+        return "v15"
+    return ""

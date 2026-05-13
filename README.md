@@ -184,6 +184,12 @@ python -m compileall src dashboard export_model.py patch_checkpoint.py tests
 python -m unittest discover -s tests
 ```
 
+Hoặc chạy gộp:
+
+```bash
+python scripts/smoke_check.py
+```
+
 Smoke tests sẽ skip phần load artifact nếu checkpoint/pipeline không tồn tại trên máy hiện tại.
 
 ## LLM Triage

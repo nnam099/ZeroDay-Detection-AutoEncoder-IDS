@@ -207,6 +207,13 @@ except ImportError:
     normalize_real_world_logs = None
     st.warning("[!] Khong tim thay log_normalizer.py trong src/ - CSV thuc te se khong duoc chuan hoa nang cao")
 
+try:
+    from artifact_validator import validate_artifact_contract
+    HAS_ARTIFACT_VALIDATOR = True
+except ImportError:
+    HAS_ARTIFACT_VALIDATOR = False
+    validate_artifact_contract = None
+
 HAS_LLM = False
 if LLM_DEP and HAS_LLM_DEPS:
     try:
@@ -382,6 +389,12 @@ def load_model():
         if pipeline is None:
             st.warning("[!] Thieu pipeline — chuyen sang DEMO MODE")
             return None, None, None, None
+
+        if HAS_ARTIFACT_VALIDATOR and validate_artifact_contract is not None:
+            validation = validate_artifact_contract(checkpoint, pipeline)
+            for warning in validation.warnings:
+                st.warning(f"[Artifact] {warning}")
+            validation.raise_for_errors()
 
         PIPELINE_THRESHOLDS = pipeline.get('thresholds')
         PIPELINE_META = pipeline
