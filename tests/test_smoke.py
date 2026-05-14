@@ -328,6 +328,80 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertEqual(quality["level"], "LOW")
         self.assertTrue(any("directional" in warning for warning in quality["warnings"]))
 
+    def test_dashboard_runtime_preprocess_aligns_features(self):
+        from dashboard_runtime import preprocess_dashboard_df
+
+        df = pd.DataFrame({
+            "proto": ["tcp"],
+            "service": ["http"],
+            "state": ["CON"],
+            "dur": [2.0],
+            "sbytes": [100],
+            "dbytes": [50],
+        })
+        result = preprocess_dashboard_df(
+            df,
+            ["dur", "proto_num", "service_num", "state_num", "bytes_ratio", "missing_feature"],
+            "v14",
+            pipeline_meta={
+                "categorical_maps": {
+                    "proto": {"tcp": 7, "unk": -1},
+                    "service": {"http": 3, "unk": -1},
+                    "state": {"CON": 2, "unk": -1},
+                }
+            },
+        )
+
+        self.assertEqual(result.features.shape, (1, 6))
+        self.assertEqual(result.features[0, 0], 2.0)
+        self.assertEqual(result.features[0, 1], 7.0)
+        self.assertEqual(result.features[0, 2], 3.0)
+        self.assertEqual(result.features[0, 3], 2.0)
+        self.assertAlmostEqual(float(result.features[0, 4]), 100 / 150, places=5)
+        self.assertEqual(result.features[0, 5], 0.0)
+        self.assertIsNone(result.normalization_report)
+
+    def test_dashboard_runtime_preprocess_reports_normalizer_failure(self):
+        from dashboard_runtime import preprocess_dashboard_df
+
+        def broken_normalizer(_df):
+            raise ValueError("bad schema")
+
+        result = preprocess_dashboard_df(
+            pd.DataFrame({"dur": [1.5]}),
+            ["dur", "missing_feature"],
+            "v14",
+            normalizer=broken_normalizer,
+        )
+
+        self.assertEqual(result.features.tolist(), [[1.5, 0.0]])
+        self.assertEqual(result.normalization_report["schema"], "normalization_failed")
+        self.assertIn("bad schema", result.normalization_report["error"])
+
+    def test_dashboard_runtime_builds_alert_context_contract(self):
+        from dashboard_runtime import build_alert_context_from_log
+
+        context = build_alert_context_from_log(
+            {
+                "source_row": 42,
+                "classifier_class": "Normal",
+                "hybrid_score": 0.91,
+                "ae_score": 0.8,
+                "max_prob": 0.4,
+                "is_zeroday": True,
+                "zero_day_family": "Shellcode",
+            },
+            timestamp="2026-05-14 12:00:00",
+        )
+
+        self.assertEqual(context["alert_id"], "ZD-000042")
+        self.assertEqual(context["timestamp"], "2026-05-14 12:00:00")
+        self.assertEqual(context["predicted_class"], "Zero-Day Candidate")
+        self.assertEqual(context["classifier_class"], "Normal")
+        self.assertTrue(context["is_zeroday"])
+        self.assertEqual(context["zero_day_family"], "Shellcode")
+        self.assertIn("hybrid_score", context["raw_scores"])
+
     def test_zero_day_vote_decision_requires_multiple_signals(self):
         from inference_runtime import zero_day_decision
 

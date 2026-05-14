@@ -234,6 +234,10 @@ from inference_runtime import (
     traffic_verdict as runtime_traffic_verdict,
     zero_day_decision as runtime_zero_day_decision,
 )
+from dashboard_runtime import (
+    build_alert_context_from_log as runtime_build_alert_context_from_log,
+    preprocess_dashboard_df as runtime_preprocess_dashboard_df,
+)
 
 HAS_LLM = False
 if LLM_DEP and HAS_LLM_DEPS:
@@ -460,13 +464,6 @@ if PIPELINE_THRESHOLDS:
 if label_encoder is not None:
     CLASS_NAMES = list(label_encoder.classes_)
 
-def _encode_categorical_column(series: pd.Series, mapping=None) -> np.ndarray:
-    values = series.astype(str).fillna('unk')
-    if mapping:
-        return values.map(lambda x: mapping.get(x, mapping.get('unk', -1))).astype(np.float32).values
-    codes, _ = pd.factorize(values, sort=True)
-    return codes.astype(np.float32)
-
 def _uploaded_file_hash(uploaded_file) -> str:
     return hashlib.sha256(uploaded_file.getvalue()).hexdigest()
 
@@ -504,53 +501,19 @@ def preprocess_raw_df(df_raw: pd.DataFrame, feat_cols: list) -> np.ndarray:
     Ap dung dung cac buoc tien xu ly nhu trong prepare_splits().
     Output LUON CO DUNG SO LUONG FEATURES = len(feat_cols), thu tu khop voi scaler.
     """
-    train_mod = __import__(f"ids_{MODEL_VERSION}_unswnb15", fromlist=["engineer_features"])
-    engineer_features = train_mod.engineer_features
-
-    df = df_raw.copy()
-    categorical_maps = PIPELINE_META.get('categorical_maps', {}) if PIPELINE_META else {}
-
-    # 0. Chuan hoa CSV log thuc te ve schema flow gan UNSW-NB15.
-    # Ho tro firewall/NetFlow/Zeek/Suricata CSV va van tuong thich UNSW raw.
+    normalizer = None
     if HAS_LOG_NORMALIZER and normalize_real_world_logs is not None:
-        try:
-            df, report = normalize_real_world_logs(df, expected_features=feat_cols)
-            st.session_state['last_log_normalization_report'] = report.as_dict()
-        except Exception as e:
-            st.session_state['last_log_normalization_report'] = {
-                "schema": "normalization_failed",
-                "error": str(e),
-            }
-
-    # 1. Encode cac cot categorical -> _num columns
-    for cat in ['proto', 'service', 'state']:
-        if cat in df.columns:
-            df[f'{cat}_num'] = _encode_categorical_column(df[cat], categorical_maps.get(cat))
-
-    # 2. Chay feature engineering (tao bytes_ratio, log_sbytes, ...)
-    existing_numeric = [c for c in df.columns if c not in
-        {'attack_cat', 'label', 'label_binary', 'srcip', 'dstip',
-         'sport', 'dsport', 'stime', 'ltime', 'id', 'proto', 'service', 'state'}
-    ]
-    try:
-        df, _ = engineer_features(df, existing_numeric)
-    except Exception:
-        pass
-
-    # 3. Chon DUNG THU TU feat_cols, padding = 0 neu thieu cot
-    #    Dam bao output co dung (n_rows, len(feat_cols)) khop voi scaler
-    rows = len(df)
-    out  = np.zeros((rows, len(feat_cols)), dtype=np.float32)
-    for i, col in enumerate(feat_cols):
-        if col in df.columns:
-            try:
-                out[:, i] = pd.to_numeric(df[col], errors='coerce').fillna(0).values
-            except Exception:
-                out[:, i] = 0.0
-        # else: cot khong co -> de 0
-
-    out = np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
-    return out
+        normalizer = lambda frame: normalize_real_world_logs(frame, expected_features=feat_cols)
+    result = runtime_preprocess_dashboard_df(
+        df_raw,
+        feat_cols,
+        MODEL_VERSION,
+        pipeline_meta=PIPELINE_META,
+        normalizer=normalizer,
+    )
+    if result.normalization_report is not None:
+        st.session_state['last_log_normalization_report'] = result.normalization_report
+    return result.features
 
 
 @st.cache_resource
@@ -745,28 +708,7 @@ def render_soc_header(title: str, subtitle: str):
     )
 
 def build_alert_context_from_log(row_scores: dict) -> dict:
-    source_row = int(row_scores.get("source_row", 0))
-    family = str(row_scores.get("zero_day_family") or "")
-    classifier_class = str(row_scores.get("classifier_class", row_scores.get("predicted_class", "Unknown")))
-    detection = str(row_scores.get("detection") or _traffic_verdict(row_scores.get("is_zeroday"), classifier_class))
-    return {
-        "alert_id": f"ZD-{source_row:06d}",
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "source_row": source_row,
-        "hybrid_score": float(row_scores.get("hybrid_score", 0)),
-        "ae_score": float(row_scores.get("ae_score", 0)),
-        "max_prob": float(row_scores.get("max_prob", 0)),
-        "predicted_class": detection,
-        "classifier_class": classifier_class,
-        "zero_day_family": family or "",
-        "is_zeroday": bool(row_scores.get("is_zeroday", False)),
-        "shap_summary": "Batch log context - SHAP explanation not computed for this row.",
-        "mitre_summary": "",
-        "top_features": [],
-        "probs": [],
-        "demo_mode": False,
-        "raw_scores": {k: str(v) for k, v in row_scores.items()},
-    }
+    return runtime_build_alert_context_from_log(row_scores)
 
 def get_llm_analysis(result: dict, comps: dict):
     """Goi LLM triage agent."""
