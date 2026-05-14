@@ -7,14 +7,14 @@ Updated: 2026-05-14
 - `scripts/smoke_check.py` now runs with UTF-8 subprocess settings, so it works on Windows paths containing Vietnamese characters.
 - `scripts/check_environment.py` now configures UTF-8 console output before printing JSON, so direct execution works from Windows paths containing Vietnamese characters.
 - Python compile passes for `src/`, `dashboard/`, `export_model.py`, `patch_checkpoint.py` and `tests/`.
-- Smoke tests pass locally: 23 tests.
+- Smoke tests pass locally: 25 tests.
 - Checkpoint `ids_v14_model.pth` loads into `IDSModel` v14 without missing or unexpected weights.
 - Pipeline v14 has 61 features and matches `n_features` in the checkpoint.
 - `log_normalizer.py` maps common firewall/flow CSV columns into an UNSW-like flow schema.
 - Dashboard validates the checkpoint/pipeline contract before inference.
 - Pure inference verdict/risk/CSV-quality helpers are split into `src/inference_runtime.py` and covered by smoke tests.
 - Dashboard batch inference is split into `src/inference_runtime.py` and covered by a dashboard contract smoke test.
-- Dashboard preprocessing and batch alert context construction are split into `src/dashboard_runtime.py` and covered by smoke tests.
+- Dashboard preprocessing, batch alert context construction, AI context option selection and LLM fallback handling are split into `src/dashboard_runtime.py` and covered by smoke tests.
 - `llm_agent.py` no longer initializes the provider client on import; it initializes lazily when LLM output is requested.
 - `patch_checkpoint.py` now validates checkpoint structure, accepts a path argument and creates a backup by default.
 - `artifact_validator.py` rejects duplicate/empty feature names and invalid threshold metadata.
@@ -33,11 +33,11 @@ Updated: 2026-05-14
 - Artifact v14 stores the metadata needed for inference: scaler, label encoder, feature list and thresholds.
 - Dashboard has demo fallback when artifacts are missing and supports common real-world CSV uploads through the normalizer.
 - MITRE mapping is packaged separately and is easy to extend with more techniques/evidence rules.
-- Smoke tests cover the highest-risk runtime contracts: artifact compatibility, threshold metadata validation, artifact hash drift detection, duplicate feature metadata rejection, environment readiness reporting, export config handling, checkpoint metadata patching, CSV input guardrails, normalizer behavior, dashboard preprocessing/context helpers, CSV quality classification, MITRE mapping and LLM import/fallback behavior.
+- Smoke tests cover the highest-risk runtime contracts: artifact compatibility, threshold metadata validation, artifact hash drift detection, duplicate feature metadata rejection, environment readiness reporting, export config handling, checkpoint metadata patching, CSV input guardrails, normalizer behavior, dashboard preprocessing/context helpers, AI context selection, CSV quality classification, MITRE mapping and LLM import/fallback behavior.
 
 ## Current Risks
 
-- `dashboard/app.py` is still a large file. Verdict/risk, batch inference, preprocessing and batch alert context helpers have been split out, but UI and LLM workflow should be split further for unit testing.
+- `dashboard/app.py` is still a large file. Verdict/risk, batch inference, preprocessing, batch alert context helpers and AI/LLM fallback logic have been split out, but UI rendering and session-state orchestration should be split further for unit testing.
 - Some code comments/docstrings still contain mojibake or ASCII-only Vietnamese text from earlier encoding issues.
 - v14 artifact compatibility is verified, but full model performance metrics have not been regenerated after the latest operational fixes.
 - v15 is experimental. The dashboard can select it, but stable v15 use requires separately trained/exported artifacts.
@@ -45,7 +45,7 @@ Updated: 2026-05-14
 
 ## Next Priorities
 
-1. Move dashboard AI-context selection and LLM workflow into a testable runtime module.
+1. Add a lightweight alert store so alert history, analyst notes and false-positive labels survive Streamlit reloads.
 2. Regenerate v14 metrics/plots from the current code and update `results/ids_v14_results.json`.
 3. Fix remaining mojibake in source comments/docstrings that are used in reports or presentations.
 4. Add schema-quality warnings for uploaded CSVs with low feature coverage or missing directional counters.

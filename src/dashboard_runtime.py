@@ -19,6 +19,12 @@ class DashboardPreprocessResult:
     normalization_report: dict[str, Any] | None = None
 
 
+@dataclass
+class AIContextOption:
+    label: str
+    context: dict[str, Any]
+
+
 def preprocess_dashboard_df(
     df_raw: pd.DataFrame,
     feature_names: list[str],
@@ -104,6 +110,102 @@ def build_alert_context_from_log(
         "demo_mode": False,
         "raw_scores": {key: str(value) for key, value in row_scores.items()},
     }
+
+
+def build_ai_context_options(
+    alert_history: list[dict[str, Any]] | None = None,
+    bulk_logs: pd.DataFrame | None = None,
+    max_history: int = 20,
+    max_bulk_logs: int = 50,
+) -> list[AIContextOption]:
+    options: list[AIContextOption] = []
+
+    for item in (alert_history or [])[-max_history:]:
+        options.append(AIContextOption(
+            label=(
+                f"Alert history | {item.get('alert_id')} | {item.get('predicted_class')} | "
+                f"score={float(item.get('hybrid_score', 0)):.3g}"
+            ),
+            context=item,
+        ))
+
+    if isinstance(bulk_logs, pd.DataFrame) and not bulk_logs.empty:
+        logs_for_ai = bulk_logs.copy()
+        if "source_row" not in logs_for_ai.columns:
+            logs_for_ai.insert(0, "source_row", np.arange(len(logs_for_ai)))
+        sort_cols = [col for col in ["is_zeroday", "hybrid_score", "ae_score"] if col in logs_for_ai.columns]
+        if sort_cols:
+            logs_for_ai = logs_for_ai.sort_values(sort_cols, ascending=False)
+        for _, row in logs_for_ai.head(max_bulk_logs).iterrows():
+            row_dict = row.to_dict()
+            options.append(AIContextOption(
+                label=(
+                    f"Zero-day log | row={int(row_dict.get('source_row', 0))} | "
+                    f"{row_dict.get('detection', row_dict.get('predicted_class'))} | "
+                    f"hybrid={float(row_dict.get('hybrid_score', 0)):.3g}"
+                ),
+                context=build_alert_context_from_log(row_dict),
+            ))
+
+    return options
+
+
+def default_ai_context_index(options: list[AIContextOption], current_alert_id: str | None) -> int:
+    for index, option in enumerate(options):
+        if option.context.get("alert_id") == current_alert_id:
+            return index
+    return 0
+
+
+def triage_alert_with_fallback(result: dict[str, Any], agent: Any | None = None) -> dict[str, Any]:
+    if agent is None:
+        return {
+            "severity": "HIGH" if result["hybrid_score"] > 0.6 else "MEDIUM",
+            "verdict": (
+                f"{'Zero-Day Candidate' if result['is_zeroday'] else result['predicted_class']} "
+                f"detected - hybrid score: {result['hybrid_score']:.3f}"
+            ),
+            "attack_summary": (
+                f"AE reconstruction error cao ({result['ae_score']:.3f}) cho thay traffic bat thuong. "
+                "Can kiem tra thu cong."
+            ),
+            "recommended_actions": ["Kiem tra nguon IP", "Xem xet block traffic", "Escalate len Tier 2"],
+            "false_positive_risk": "MEDIUM",
+            "false_positive_reason": "Chua co LLM de phan tich sau hon",
+            "analyst_note": "Kich hoat LLM agent de co phan tich chi tiet hon",
+        }
+    try:
+        return agent.triage_alert(result)
+    except Exception as exc:
+        return {
+            "severity": "HIGH",
+            "verdict": "LLM analysis loi - can review thu cong",
+            "attack_summary": str(exc),
+            "recommended_actions": ["Review thu cong"],
+            "false_positive_risk": "UNKNOWN",
+            "false_positive_reason": "N/A",
+            "analyst_note": f"Loi: {exc}",
+        }
+
+
+def answer_analyst_question(
+    question: str,
+    alert_context: dict[str, Any],
+    has_llm: bool,
+    agent_factory: Callable[[], Any] | None = None,
+    llm_provider: str | None = None,
+    llm_dependency: str | None = None,
+    has_llm_dependency: bool = True,
+) -> str:
+    if has_llm and agent_factory is not None:
+        try:
+            return str(agent_factory().explain_to_analyst(question, alert_context))
+        except Exception as exc:
+            return f"Loi LLM Agent: {exc}. Vui long kiem tra lai provider va API Key trong file .env."
+
+    if llm_dependency and not has_llm_dependency:
+        return f"Chua cai thu vien cho LLM provider '{llm_provider}'. Can cai: {llm_dependency}."
+    return "Khong tim thay llm_agent.py. Vui long kiem tra lai source code."
 
 
 def _encode_categorical_column(series: pd.Series, mapping=None) -> np.ndarray:

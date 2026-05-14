@@ -235,8 +235,12 @@ from inference_runtime import (
     zero_day_decision as runtime_zero_day_decision,
 )
 from dashboard_runtime import (
+    answer_analyst_question as runtime_answer_analyst_question,
     build_alert_context_from_log as runtime_build_alert_context_from_log,
+    build_ai_context_options as runtime_build_ai_context_options,
+    default_ai_context_index as runtime_default_ai_context_index,
     preprocess_dashboard_df as runtime_preprocess_dashboard_df,
+    triage_alert_with_fallback as runtime_triage_alert_with_fallback,
 )
 
 HAS_LLM = False
@@ -712,28 +716,7 @@ def build_alert_context_from_log(row_scores: dict) -> dict:
 
 def get_llm_analysis(result: dict, comps: dict):
     """Goi LLM triage agent."""
-    if 'agent' not in comps:
-        return {
-            "severity"           : "HIGH" if result['hybrid_score'] > 0.6 else "MEDIUM",
-            "verdict"            : f"{'Zero-Day Candidate' if result['is_zeroday'] else result['predicted_class']} detected - hybrid score: {result['hybrid_score']:.3f}",
-            "attack_summary"     : f"AE reconstruction error cao ({result['ae_score']:.3f}) cho thay traffic bat thuong. Can kiem tra thu cong.",
-            "recommended_actions": ["Kiem tra nguon IP", "Xem xet block traffic", "Escalate len Tier 2"],
-            "false_positive_risk": "MEDIUM",
-            "false_positive_reason": "Chua co LLM de phan tich sau hon",
-            "analyst_note"       : "Kich hoat LLM agent de co phan tich chi tiet hon",
-        }
-    try:
-        return comps['agent'].triage_alert(result)
-    except Exception as e:
-        return {
-            "severity"           : "HIGH",
-            "verdict"            : "LLM analysis loi - can review thu cong",
-            "attack_summary"     : str(e),
-            "recommended_actions": ["Review thu cong"],
-            "false_positive_risk": "UNKNOWN",
-            "false_positive_reason": "N/A",
-            "analyst_note"       : f"Loi: {e}",
-        }
+    return runtime_triage_alert_with_fallback(result, comps.get('agent'))
 
 # ── Display result ────────────────────────────────────────────────
 
@@ -1474,39 +1457,17 @@ elif page == "[4] Ask AI":
         "Ask follow-up questions against the latest alert context, MITRE mapping and model evidence.",
     )
 
-    context_options = []
-    history = st.session_state.get("alert_history", [])
-    for i, item in enumerate(history[-20:]):
-        context_options.append((
-            f"Alert history | {item.get('alert_id')} | {item.get('predicted_class')} | score={float(item.get('hybrid_score', 0)):.3g}",
-            item,
-        ))
-
-    bulk_logs = st.session_state.get("bulk_result_df")
-    if isinstance(bulk_logs, pd.DataFrame) and not bulk_logs.empty:
-        logs_for_ai = bulk_logs.copy()
-        if "source_row" not in logs_for_ai.columns:
-            logs_for_ai.insert(0, "source_row", np.arange(len(logs_for_ai)))
-        logs_for_ai = logs_for_ai.sort_values(["is_zeroday", "hybrid_score", "ae_score"], ascending=False).head(50)
-        for _, row in logs_for_ai.iterrows():
-            row_dict = row.to_dict()
-            context_options.append((
-                f"Zero-day log | row={int(row_dict.get('source_row', 0))} | "
-                f"{row_dict.get('detection', row_dict.get('predicted_class'))} | "
-                f"hybrid={float(row_dict.get('hybrid_score', 0)):.3g}",
-                build_alert_context_from_log(row_dict),
-            ))
+    context_options = runtime_build_ai_context_options(
+        st.session_state.get("alert_history", []),
+        st.session_state.get("bulk_result_df"),
+    )
 
     if context_options:
-        labels = [x[0] for x in context_options]
+        labels = [option.label for option in context_options]
         current_alert_id = st.session_state.get("last_alert", {}).get("alert_id")
-        default_idx = 0
-        for i, (_, ctx) in enumerate(context_options):
-            if ctx.get("alert_id") == current_alert_id:
-                default_idx = i
-                break
+        default_idx = runtime_default_ai_context_index(context_options, current_alert_id)
         selected_context = st.selectbox("AI context", labels, index=default_idx)
-        selected_ctx = context_options[labels.index(selected_context)][1]
+        selected_ctx = context_options[labels.index(selected_context)].context
         if st.button("Use selected context", key="use_ai_context"):
             st.session_state["last_alert"] = selected_ctx
             st.session_state["messages"] = []
@@ -1567,17 +1528,15 @@ elif page == "[4] Ask AI":
 
         with st.chat_message("assistant"):
             with st.spinner("Dang suy nghi..."):
-                if HAS_LLM:
-                    try:
-                        agent = SOCTriageAgent()
-                        answer = agent.explain_to_analyst(question, last)
-                    except Exception as e:
-                        answer = f"Loi LLM Agent: {e}. Vui long kiem tra lai provider va API Key trong file .env."
-                else:
-                    if LLM_DEP and not HAS_LLM_DEPS:
-                        answer = f"Chua cai thu vien cho LLM provider '{LLM_PROVIDER}'. Can cai: {LLM_DEP}."
-                    else:
-                        answer = "Khong tim thay llm_agent.py. Vui long kiem tra lai source code."
+                answer = runtime_answer_analyst_question(
+                    question,
+                    last,
+                    HAS_LLM,
+                    agent_factory=SOCTriageAgent if HAS_LLM else None,
+                    llm_provider=LLM_PROVIDER,
+                    llm_dependency=LLM_DEP,
+                    has_llm_dependency=HAS_LLM_DEPS,
+                )
 
             st.write(f"**SOC AI:** {answer}")
             st.session_state.messages.append({"role": "assistant", "content": answer})

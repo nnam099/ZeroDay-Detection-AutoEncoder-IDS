@@ -402,6 +402,70 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertEqual(context["zero_day_family"], "Shellcode")
         self.assertIn("hybrid_score", context["raw_scores"])
 
+    def test_dashboard_runtime_builds_ai_context_options(self):
+        from dashboard_runtime import build_ai_context_options, default_ai_context_index
+
+        history = [
+            {"alert_id": "A1", "predicted_class": "Known-Attack", "hybrid_score": 0.4},
+            {"alert_id": "A2", "predicted_class": "Zero-Day Candidate", "hybrid_score": 0.8},
+        ]
+        bulk = pd.DataFrame({
+            "source_row": [10, 11],
+            "detection": ["Normal", "Zero-Day Candidate"],
+            "classifier_class": ["Normal", "DoS"],
+            "hybrid_score": [0.1, 0.9],
+            "ae_score": [0.1, 0.8],
+            "max_prob": [0.95, 0.4],
+            "is_zeroday": [False, True],
+        })
+
+        options = build_ai_context_options(history, bulk, max_history=1, max_bulk_logs=1)
+
+        self.assertEqual(len(options), 2)
+        self.assertIn("A2", options[0].label)
+        self.assertIn("row=11", options[1].label)
+        self.assertEqual(options[1].context["alert_id"], "ZD-000011")
+        self.assertEqual(default_ai_context_index(options, "ZD-000011"), 1)
+        self.assertEqual(default_ai_context_index(options, "missing"), 0)
+
+    def test_dashboard_runtime_llm_fallbacks_are_testable(self):
+        from dashboard_runtime import answer_analyst_question, triage_alert_with_fallback
+
+        alert = {
+            "hybrid_score": 0.7,
+            "ae_score": 0.6,
+            "predicted_class": "Zero-Day Candidate",
+            "is_zeroday": True,
+        }
+        fallback = triage_alert_with_fallback(alert)
+        self.assertEqual(fallback["severity"], "HIGH")
+        self.assertIn("hybrid score: 0.700", fallback["verdict"])
+
+        class BrokenAgent:
+            def triage_alert(self, _result):
+                raise RuntimeError("provider failed")
+
+        error_result = triage_alert_with_fallback(alert, BrokenAgent())
+        self.assertEqual(error_result["false_positive_risk"], "UNKNOWN")
+        self.assertIn("provider failed", error_result["attack_summary"])
+
+        missing_dep = answer_analyst_question(
+            "why?",
+            alert,
+            has_llm=False,
+            llm_provider="groq",
+            llm_dependency="groq",
+            has_llm_dependency=False,
+        )
+        self.assertIn("Chua cai thu vien", missing_dep)
+
+        class ExplainAgent:
+            def explain_to_analyst(self, question, context):
+                return f"{question}:{context['predicted_class']}"
+
+        answer = answer_analyst_question("why", alert, True, agent_factory=ExplainAgent)
+        self.assertEqual(answer, "why:Zero-Day Candidate")
+
     def test_zero_day_vote_decision_requires_multiple_signals(self):
         from inference_runtime import zero_day_decision
 
