@@ -65,12 +65,15 @@ class ServeApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(set(payload), {"label", "confidence", "ae_re", "hybrid_score", "is_anomaly"})
+        self.assertEqual(set(payload), {"label", "confidence", "ae_re", "hybrid_score", "is_anomaly", "uncertainty"})
         self.assertIsInstance(payload["label"], str)
         self.assertIsInstance(payload["confidence"], float)
         self.assertIsInstance(payload["ae_re"], float)
         self.assertIsInstance(payload["hybrid_score"], float)
         self.assertIsInstance(payload["is_anomaly"], bool)
+        self.assertEqual(set(payload["uncertainty"]), {"entropy", "std_max_class"})
+        self.assertIsInstance(payload["uncertainty"]["entropy"], float)
+        self.assertIsInstance(payload["uncertainty"]["std_max_class"], float)
 
     def _write_dummy_artifacts(self, model_path: Path, pipeline_path: Path):
         n_features = 55

@@ -1,18 +1,18 @@
-# IDS v15.0 - dependencies
-torch>=2.0
-numpy>=1.24
-pandas>=1.5
-scikit-learn>=1.2
-matplotlib>=3.7
-pyyaml>=6.0
-fastapi>=0.110
-uvicorn[standard]>=0.27
-httpx>=0.26
+# IDS dependencies
+torch==2.3.1
+numpy==1.26.4
+pandas==2.2.2
+scikit-learn==1.5.0
+matplotlib==3.9.0
+pyyaml==6.0.2
+fastapi==0.111.0
+uvicorn==0.30.1
+httpx==0.27.0
 
 # Optional - dashboard and explainability
-streamlit>=1.30
-shap>=0.43
-python-dotenv>=1.0
+streamlit==1.36.0
+shap==0.46.0
+python-dotenv==1.0.1
 
 # Optional - LLM providers. Install one provider package only when needed.
 # groq

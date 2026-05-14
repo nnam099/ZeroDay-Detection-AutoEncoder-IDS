@@ -26,6 +26,36 @@ def compute_hybrid_meta_score(ae_re, softmax_score, hybrid_meta):
     return _sigmoid_np(intercept + coef[0] * ae_re + coef[1] * softmax_score).astype(np.float32)
 
 
+def predict_with_uncertainty(model, x, n_samples=30):
+    """
+    Estimate predictive uncertainty with Monte Carlo Dropout.
+
+    This intentionally enables training mode for the sampled forward passes so
+    Dropout layers stay stochastic, then restores the model's previous mode.
+    """
+    if n_samples <= 0:
+        raise ValueError('n_samples must be positive')
+
+    was_training = bool(model.training)
+    model.train()
+    samples = []
+    try:
+        with torch.no_grad():
+            for _ in range(int(n_samples)):
+                outputs = model(x)
+                logits = outputs[0] if isinstance(outputs, tuple) else outputs
+                samples.append(torch.softmax(logits, dim=-1))
+    finally:
+        if not was_training:
+            model.eval()
+
+    stacked = torch.stack(samples, dim=0)
+    mean_probs = stacked.mean(dim=0).squeeze(0)
+    std_probs = stacked.std(dim=0, unbiased=False).squeeze(0)
+    entropy = -(mean_probs * torch.log(mean_probs.clamp_min(1e-12))).sum()
+    return mean_probs.detach().cpu(), std_probs.detach().cpu(), float(entropy.detach().cpu().item())
+
+
 def _hybrid_base_features(model, X, device, batch=512):
     model.eval()
     features = []

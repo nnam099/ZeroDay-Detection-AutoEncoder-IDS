@@ -653,6 +653,22 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertEqual(result["is_zeroday"].tolist(), [True, False])
         self.assertEqual(result["zero_day_rule"].iloc[0], "vote_2_of_2")
 
+    def test_predict_with_uncertainty_uses_mc_dropout_contract(self):
+        from ids.evaluator import predict_with_uncertainty
+        from ids.models import IDSModel
+
+        model = IDSModel(n_features=4, n_classes=3, hidden=16, ae_hidden=8)
+        model.eval()
+        x = torch.ones(1, 4)
+
+        mean_probs, std_probs, entropy = predict_with_uncertainty(model, x, n_samples=5)
+
+        self.assertFalse(model.training)
+        self.assertEqual(tuple(mean_probs.shape), (3,))
+        self.assertEqual(tuple(std_probs.shape), (3,))
+        self.assertAlmostEqual(float(mean_probs.sum()), 1.0, places=5)
+        self.assertGreaterEqual(entropy, 0.0)
+
     def test_batch_evaluator_calibrates_threshold_profile(self):
         from batch_evaluator import calibrate_thresholds
 

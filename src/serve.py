@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import torch
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -15,8 +16,10 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from batch_evaluator import IDSArtifacts, load_ids_artifacts, run_batch_scores
+from ids.evaluator import predict_with_uncertainty
 
 MODEL_VERSION = "v14"
+LOW_CONFIDENCE_ENTROPY = 1.5
 
 
 class PredictRequest(BaseModel):
@@ -69,7 +72,18 @@ def _prediction_row(features: list[float], artifacts: IDSArtifacts) -> dict[str,
     scores = run_batch_scores(raw, artifacts, batch_size=1)
     if scores.empty:
         raise HTTPException(status_code=500, detail="model produced no prediction")
-    return scores.iloc[0].to_dict()
+
+    scaled = artifacts.pipeline["scaler"].transform(raw)
+    scaled = np.clip(np.nan_to_num(scaled, nan=0.0, posinf=10.0, neginf=-10.0), -10.0, 10.0)
+    x = torch.as_tensor(scaled, dtype=torch.float32)
+    mean_probs, std_probs, entropy = predict_with_uncertainty(artifacts.model, x)
+    row = scores.iloc[0].to_dict()
+    pred_idx = int(np.asarray(mean_probs).argmax())
+    row["uncertainty"] = {
+        "entropy": float(entropy),
+        "std_max_class": float(std_probs[pred_idx].item()),
+    }
+    return row
 
 
 @app.get("/health")
@@ -80,10 +94,17 @@ async def health() -> dict[str, str]:
 @app.post("/predict")
 async def predict(payload: PredictRequest) -> dict[str, Any]:
     row = _prediction_row(payload.features, _artifacts())
+    uncertainty = row.get("uncertainty", {})
+    entropy = float(uncertainty.get("entropy", 0.0))
+    label = "LOW_CONFIDENCE" if entropy > LOW_CONFIDENCE_ENTROPY else str(row.get("predicted_class", "Unknown"))
     return {
-        "label": str(row.get("predicted_class", "Unknown")),
+        "label": label,
         "confidence": float(row.get("max_prob", 0.0)),
         "ae_re": float(row.get("ae_re", row.get("ae_score", 0.0))),
         "hybrid_score": float(row.get("hybrid_score", row.get("hybrid", 0.0))),
         "is_anomaly": bool(row.get("is_zeroday", False)),
+        "uncertainty": {
+            "entropy": entropy,
+            "std_max_class": float(uncertainty.get("std_max_class", 0.0)),
+        },
     }
