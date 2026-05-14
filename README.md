@@ -21,8 +21,8 @@ Main flow:
 ## Current Status
 
 - v14 is the operational default because local artifacts exist in `checkpoints/`.
-- `scripts/smoke_check.py` passes locally with 26 tests.
-- Smoke coverage includes artifact contract validation, threshold metadata validation, artifact manifest hashing, duplicate feature-name rejection, environment readiness checks, export config handling, checkpoint metadata patch logic, SQLite alert store persistence, CSV input guardrails, CSV normalization quality checks, dashboard preprocessing/context contracts, AI context selection, LLM fallback behavior, MITRE mapping and v14 artifact loading.
+- `scripts/smoke_check.py` passes locally with 28 tests.
+- Smoke coverage includes artifact contract validation, threshold metadata validation, artifact manifest hashing, duplicate feature-name rejection, environment readiness checks, export config handling, checkpoint metadata patch logic, SQLite alert store persistence, CSV input guardrails, CSV normalization quality checks, dashboard preprocessing/context contracts, AI context selection, alert queue filtering, top-N batch alert selection, LLM fallback behavior, MITRE mapping and v14 artifact loading.
 - `llm_agent.py` lazy-loads provider clients, so importing dashboard code does not require an API key.
 - A Windows GitHub Actions smoke workflow is available at `.github/workflows/smoke.yml`.
 - A basic Dockerfile is available for dashboard deployment experiments.
@@ -33,7 +33,7 @@ Main flow:
 - Known-attack classification for classes such as `Normal`, `DoS`, `Exploits`, `Reconnaissance` and `Generic`.
 - Zero-day/OOD detection using reconstruction error, classifier confidence and calibrated hybrid thresholds.
 - Streamlit SOC dashboard for single alert review, CSV batch analysis, alert history and AI follow-up.
-- SQLite alert store for persisted queue history, status and analyst notes.
+- SQLite alert store for persisted queue history, status, analyst notes, queue filtering and top-N batch alert persistence.
 - Real-world CSV normalization for common firewall/flow/Zeek/Suricata-like exports.
 - CSV upload guardrails for empty, oversized or malformed files.
 - SHAP top-feature explanation.

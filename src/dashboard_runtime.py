@@ -150,6 +150,65 @@ def build_ai_context_options(
     return options
 
 
+def filter_alert_history(
+    alerts: list[dict[str, Any]],
+    status: str = "All",
+    severity: str = "All",
+    ood_filter: str = "All",
+    query: str = "",
+) -> list[dict[str, Any]]:
+    query = query.strip().lower()
+    out: list[dict[str, Any]] = []
+    for alert in alerts:
+        if status != "All" and str(alert.get("status", "new")) != status:
+            continue
+        if severity != "All" and str(alert.get("llm_severity", "N/A")).upper() != severity.upper():
+            continue
+        if ood_filter == "OOD only" and not bool(alert.get("is_zeroday")):
+            continue
+        if ood_filter == "Known only" and bool(alert.get("is_zeroday")):
+            continue
+        if query:
+            haystack = " ".join(str(alert.get(key, "")) for key in [
+                "alert_id", "predicted_class", "classifier_class", "status",
+                "source", "zero_day_family", "analyst_note",
+            ]).lower()
+            if query not in haystack:
+                continue
+        out.append(alert)
+    return out
+
+
+def build_top_batch_alerts(
+    result_df: pd.DataFrame,
+    file_hash: str,
+    limit: int = 25,
+    timestamp: str | None = None,
+) -> list[dict[str, Any]]:
+    if not isinstance(result_df, pd.DataFrame) or result_df.empty or limit <= 0:
+        return []
+
+    df = result_df.copy()
+    if "source_row" not in df.columns:
+        df.insert(0, "source_row", np.arange(len(df)))
+    sort_cols = [col for col in ["is_zeroday", "hybrid_score", "ae_score", "max_prob"] if col in df.columns]
+    ascending = [False, False, False, True][:len(sort_cols)]
+    if sort_cols:
+        df = df.sort_values(sort_cols, ascending=ascending)
+
+    prefix = (file_hash or "unknown")[:8]
+    alerts: list[dict[str, Any]] = []
+    for _, row in df.head(limit).iterrows():
+        row_dict = row.to_dict()
+        source_row = int(row_dict.get("source_row", 0))
+        alert = build_alert_context_from_log(row_dict, timestamp=timestamp)
+        alert["alert_id"] = f"BATCH-{prefix}-{source_row:06d}"
+        alert["source_file_hash"] = file_hash
+        alert["source"] = "batch_top"
+        alerts.append(alert)
+    return alerts
+
+
 def default_ai_context_index(options: list[AIContextOption], current_alert_id: str | None) -> int:
     for index, option in enumerate(options):
         if option.context.get("alert_id") == current_alert_id:

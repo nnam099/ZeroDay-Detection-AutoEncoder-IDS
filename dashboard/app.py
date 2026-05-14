@@ -238,7 +238,9 @@ from dashboard_runtime import (
     answer_analyst_question as runtime_answer_analyst_question,
     build_alert_context_from_log as runtime_build_alert_context_from_log,
     build_ai_context_options as runtime_build_ai_context_options,
+    build_top_batch_alerts as runtime_build_top_batch_alerts,
     default_ai_context_index as runtime_default_ai_context_index,
+    filter_alert_history as runtime_filter_alert_history,
     preprocess_dashboard_df as runtime_preprocess_dashboard_df,
     triage_alert_with_fallback as runtime_triage_alert_with_fallback,
 )
@@ -924,7 +926,25 @@ if page == "[1] Dashboard":
 
     if history:
         st.markdown("### Active Alert Queue")
-        hist_df = pd.DataFrame([{
+        f1, f2, f3, f4 = st.columns([0.9, 0.9, 0.9, 1.6])
+        status_values = sorted({str(a.get("status", "new")) for a in history})
+        severity_values = sorted({str(a.get("llm_severity", "N/A")).upper() for a in history})
+        status_filter = f1.selectbox("Status", ["All"] + status_values)
+        severity_filter = f2.selectbox("Severity", ["All"] + severity_values)
+        ood_filter = f3.selectbox("OOD", ["All", "OOD only", "Known only"])
+        search_query = f4.text_input("Search alert queue", "")
+        filtered_history = runtime_filter_alert_history(
+            history,
+            status=status_filter,
+            severity=severity_filter,
+            ood_filter=ood_filter,
+            query=search_query,
+        )
+        hist_columns = [
+            "Alert ID", "Time", "Status", "Source", "Severity", "Risk",
+            "Class", "Hybrid Score", "AE Score", "OOD Candidate",
+        ]
+        hist_rows = [{
             "Alert ID"    : a['alert_id'],
             "Time"        : a['timestamp'],
             "Status"      : a.get('status', 'new'),
@@ -935,32 +955,37 @@ if page == "[1] Dashboard":
             "Hybrid Score": round(a['hybrid_score'], 3),
             "AE Score"    : round(a.get('ae_score', 0), 3),
             "OOD Candidate": "YES" if a['is_zeroday'] else "NO",
-        } for a in history])
+        } for a in filtered_history]
+        hist_df = pd.DataFrame(hist_rows, columns=hist_columns)
         hist_df = hist_df.sort_values(["Risk", "Time"], ascending=[False, False])
+        st.caption(f"Showing {len(filtered_history):,} of {len(history):,} persisted alerts")
         st.dataframe(hist_df, width="stretch", hide_index=True)
 
-        left, right = st.columns([1.1, 1])
-        with left:
-            st.markdown("### Severity Distribution")
-            sev_counts = hist_df["Severity"].value_counts().rename_axis("Severity").reset_index(name="Count")
-            st.bar_chart(sev_counts.set_index("Severity"))
-        with right:
-            st.markdown("### OOD Candidate Mix")
-            zd_counts = hist_df["OOD Candidate"].value_counts().rename_axis("OOD Candidate").reset_index(name="Count")
-            st.bar_chart(zd_counts.set_index("OOD Candidate"))
+        if not hist_df.empty:
+            left, right = st.columns([1.1, 1])
+            with left:
+                st.markdown("### Severity Distribution")
+                sev_counts = hist_df["Severity"].value_counts().rename_axis("Severity").reset_index(name="Count")
+                st.bar_chart(sev_counts.set_index("Severity"))
+            with right:
+                st.markdown("### OOD Candidate Mix")
+                zd_counts = hist_df["OOD Candidate"].value_counts().rename_axis("OOD Candidate").reset_index(name="Count")
+                st.bar_chart(zd_counts.set_index("OOD Candidate"))
 
-        st.markdown("### Alert Disposition")
-        selected_alert_id = st.selectbox("Alert", hist_df["Alert ID"].tolist())
-        selected_alert = next((a for a in history if a.get("alert_id") == selected_alert_id), {})
-        status_options = ["new", "triaged", "investigating", "confirmed", "false_positive", "closed"]
-        current_status = selected_alert.get("status", "new")
-        status_idx = status_options.index(current_status) if current_status in status_options else 0
-        d1, d2 = st.columns([0.8, 1.2])
-        new_status = d1.selectbox("Status", status_options, index=status_idx)
-        analyst_note = d2.text_input("Analyst note", value=str(selected_alert.get("analyst_note", "")))
-        if st.button("Update alert status", key="update_alert_status"):
-            update_persisted_alert_status(selected_alert_id, new_status, analyst_note)
-            st.rerun()
+            st.markdown("### Alert Disposition")
+            selected_alert_id = st.selectbox("Alert", hist_df["Alert ID"].tolist())
+            selected_alert = next((a for a in history if a.get("alert_id") == selected_alert_id), {})
+            status_options = ["new", "triaged", "investigating", "confirmed", "false_positive", "closed"]
+            current_status = selected_alert.get("status", "new")
+            status_idx = status_options.index(current_status) if current_status in status_options else 0
+            d1, d2 = st.columns([0.8, 1.2])
+            new_status = d1.selectbox("Status", status_options, index=status_idx)
+            analyst_note = d2.text_input("Analyst note", value=str(selected_alert.get("analyst_note", "")))
+            if st.button("Update alert status", key="update_alert_status"):
+                update_persisted_alert_status(selected_alert_id, new_status, analyst_note)
+                st.rerun()
+        else:
+            st.info("No persisted alerts match the current filters.")
     else:
         st.markdown(
             """
@@ -1070,6 +1095,14 @@ elif page == "[2] Analyze Alert":
             display_result(result, llm)
 
     else:  # Upload CSV
+        persist_top_n = st.number_input(
+            "Persist top batch alerts",
+            min_value=0,
+            max_value=100,
+            value=25,
+            step=5,
+            help="Save the highest-risk batch rows into the SQLite alert queue. Use 0 to disable persistence.",
+        )
         uploaded = st.file_uploader(
             "Upload CSV (UNSW-NB15 raw hoac log thuc te: firewall, NetFlow, Zeek, Suricata)", type="csv"
         )
@@ -1205,24 +1238,20 @@ elif page == "[2] Analyze Alert":
 
                 # Luu alert gan nhat de tab Ask AI co the su dung
                 try:
-                    top_idx = result_df['hybrid_score'].idxmax()
-                    top_row = result_df.loc[top_idx]
-                    top_alert = {
-                        "alert_id": f"BULK-{int(top_idx):06d}",
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "hybrid_score": float(top_row['hybrid_score']),
-                        "ae_score": float(top_row['ae_score']),
-                        "max_prob": float(top_row['max_prob']),
-                        "predicted_class": str(top_row['predicted_class']),
-                        "classifier_class": str(top_row.get('classifier_class', top_row['predicted_class'])),
-                        "detection": str(top_row.get('detection', top_row['predicted_class'])),
-                        "is_zeroday": bool(top_row['is_zeroday']),
-                        "demo_mode": False,
-                    }
-                    st.session_state['last_alert'] = top_alert
-                    if st.session_state.get("bulk_alert_saved_hash") != file_hash:
-                        persist_alert(top_alert, None, source="batch_top")
-                        st.session_state["bulk_alert_saved_hash"] = file_hash
+                    batch_alerts = runtime_build_top_batch_alerts(
+                        result_df,
+                        file_hash=file_hash,
+                        limit=int(persist_top_n),
+                        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                    if batch_alerts:
+                        st.session_state['last_alert'] = batch_alerts[0]
+                    persist_key = f"{file_hash}:{int(persist_top_n)}"
+                    if batch_alerts and st.session_state.get("bulk_alert_saved_hash") != persist_key:
+                        for alert in batch_alerts:
+                            persist_alert(alert, None, source="batch_top")
+                        st.session_state["bulk_alert_saved_hash"] = persist_key
+                        st.caption(f"Saved top {len(batch_alerts)} batch alerts to SQLite queue.")
                 except Exception:
                     pass
 

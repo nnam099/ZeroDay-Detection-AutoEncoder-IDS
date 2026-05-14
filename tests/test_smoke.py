@@ -499,6 +499,54 @@ class CoreSmokeTests(unittest.TestCase):
         answer = answer_analyst_question("why", alert, True, agent_factory=ExplainAgent)
         self.assertEqual(answer, "why:Zero-Day Candidate")
 
+    def test_dashboard_runtime_filters_alert_history(self):
+        from dashboard_runtime import filter_alert_history
+
+        alerts = [
+            {
+                "alert_id": "A1",
+                "status": "new",
+                "llm_severity": "HIGH",
+                "is_zeroday": True,
+                "predicted_class": "Zero-Day Candidate",
+                "analyst_note": "source ip suspicious",
+            },
+            {
+                "alert_id": "A2",
+                "status": "closed",
+                "llm_severity": "LOW",
+                "is_zeroday": False,
+                "predicted_class": "Normal",
+                "analyst_note": "benign",
+            },
+        ]
+
+        self.assertEqual([a["alert_id"] for a in filter_alert_history(alerts, status="new")], ["A1"])
+        self.assertEqual([a["alert_id"] for a in filter_alert_history(alerts, severity="LOW")], ["A2"])
+        self.assertEqual([a["alert_id"] for a in filter_alert_history(alerts, ood_filter="OOD only")], ["A1"])
+        self.assertEqual([a["alert_id"] for a in filter_alert_history(alerts, query="benign")], ["A2"])
+
+    def test_dashboard_runtime_builds_top_batch_alerts(self):
+        from dashboard_runtime import build_top_batch_alerts
+
+        scores = pd.DataFrame({
+            "source_row": [0, 1, 2],
+            "detection": ["Normal", "Known-Attack", "Zero-Day Candidate"],
+            "classifier_class": ["Normal", "DoS", "Normal"],
+            "hybrid_score": [0.2, 0.7, 0.6],
+            "ae_score": [0.1, 0.5, 0.9],
+            "max_prob": [0.95, 0.5, 0.3],
+            "is_zeroday": [False, False, True],
+        })
+
+        alerts = build_top_batch_alerts(scores, file_hash="abcdef123456", limit=2, timestamp="2026-05-14 10:00:00")
+
+        self.assertEqual(len(alerts), 2)
+        self.assertEqual(alerts[0]["alert_id"], "BATCH-abcdef12-000002")
+        self.assertEqual(alerts[0]["predicted_class"], "Zero-Day Candidate")
+        self.assertEqual(alerts[1]["alert_id"], "BATCH-abcdef12-000001")
+        self.assertEqual(alerts[0]["source_file_hash"], "abcdef123456")
+
     def test_zero_day_vote_decision_requires_multiple_signals(self):
         from inference_runtime import zero_day_decision
 
