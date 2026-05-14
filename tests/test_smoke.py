@@ -232,6 +232,39 @@ class CoreSmokeTests(unittest.TestCase):
             self.assertFalse(result["ok"])
             self.assertTrue(any("sha256" in err for err in result["errors"]))
 
+    def test_alert_store_persists_alert_history_and_status(self):
+        from alert_store import list_alerts, save_alert, update_alert_status
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = os.path.join(tmp, "alerts.sqlite3")
+            alert = {
+                "alert_id": "A-001",
+                "timestamp": "2026-05-14 10:00:00",
+                "hybrid_score": 0.73,
+                "ae_score": 0.6,
+                "max_prob": 0.4,
+                "predicted_class": "Zero-Day Candidate",
+                "classifier_class": "Normal",
+                "is_zeroday": True,
+            }
+            llm = {"severity": "HIGH", "analyst_note": "review source IP"}
+
+            save_alert(db_path, alert, llm=llm, source="single")
+            rows = list_alerts(db_path)
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["alert_id"], "A-001")
+            self.assertEqual(rows[0]["llm_severity"], "HIGH")
+            self.assertEqual(rows[0]["source"], "single")
+            self.assertTrue(rows[0]["is_zeroday"])
+            self.assertEqual(rows[0]["llm_analysis"]["analyst_note"], "review source IP")
+
+            update_alert_status(db_path, "A-001", "false_positive", "benign scan")
+            rows = list_alerts(db_path)
+
+            self.assertEqual(rows[0]["status"], "false_positive")
+            self.assertEqual(rows[0]["analyst_note"], "benign scan")
+
     def test_log_normalizer_maps_common_firewall_csv(self):
         from log_normalizer import normalize_real_world_logs
 

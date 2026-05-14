@@ -242,6 +242,12 @@ from dashboard_runtime import (
     preprocess_dashboard_df as runtime_preprocess_dashboard_df,
     triage_alert_with_fallback as runtime_triage_alert_with_fallback,
 )
+from alert_store import (
+    init_alert_store,
+    list_alerts as alert_store_list_alerts,
+    save_alert as alert_store_save_alert,
+    update_alert_status as alert_store_update_alert_status,
+)
 
 HAS_LLM = False
 if LLM_DEP and HAS_LLM_DEPS:
@@ -255,6 +261,7 @@ if LLM_DEP and HAS_LLM_DEPS:
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 CKPT_DIR = os.getenv("IDS_CHECKPOINT_DIR", os.path.join(BASE_DIR, 'checkpoints'))
 DATA_DIR = os.getenv("IDS_DATA_DIR", os.path.join(BASE_DIR, 'data'))
+ALERT_DB_PATH = os.getenv("IDS_ALERT_DB_PATH", os.path.join(BASE_DIR, 'results', 'alerts.sqlite3'))
 
 # v14 is the operational default because this repo currently ships v14 artifacts.
 MODEL_VERSION = os.getenv("IDS_MODEL_VERSION", "v14").strip().lower()
@@ -343,6 +350,7 @@ st.sidebar.markdown(
         <div class="health-label">Model</div><div>{_health(os.path.exists(MODEL_PATH))}</div>
         <div class="health-label">Pipeline</div><div>{_health(os.path.exists(PIPE_PATH))}</div>
         <div class="health-label">Data</div><div>{_health(os.path.exists(DATA_PATH))}</div>
+        <div class="health-label">Alert DB</div><div>{_health(os.path.exists(ALERT_DB_PATH), warn=True)}</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -700,6 +708,40 @@ def severity_class(severity: str) -> str:
 def risk_score(result: dict, severity: str | None = None) -> int:
     return runtime_risk_score(result, severity)
 
+def load_alert_history(force: bool = False) -> list[dict]:
+    if force or not st.session_state.get("alert_history_loaded"):
+        try:
+            init_alert_store(ALERT_DB_PATH)
+            st.session_state["alert_history"] = alert_store_list_alerts(ALERT_DB_PATH, limit=200)
+            st.session_state["alert_history_loaded"] = True
+        except Exception as e:
+            st.session_state["alert_history"] = st.session_state.get("alert_history", [])
+            st.warning(f"Khong load duoc alert store: {e}")
+    return st.session_state.get("alert_history", [])
+
+def persist_alert(result: dict, llm: dict | None = None, source: str = "single") -> None:
+    if result.get("demo_mode"):
+        return
+    result["llm_severity"] = (llm or {}).get("severity", result.get("llm_severity", "N/A"))
+    result["risk"] = risk_score(result, result.get("llm_severity"))
+    try:
+        alert_store_save_alert(ALERT_DB_PATH, result, llm=llm, source=source)
+        st.session_state["alert_history"] = alert_store_list_alerts(ALERT_DB_PATH, limit=200)
+        st.session_state["alert_history_loaded"] = True
+    except Exception as e:
+        st.warning(f"Khong luu duoc alert vao SQLite store: {e}")
+        history = st.session_state.setdefault("alert_history", [])
+        if not any(item.get("alert_id") == result.get("alert_id") for item in history):
+            history.append(result)
+
+def update_persisted_alert_status(alert_id: str, status: str, analyst_note: str = "") -> None:
+    try:
+        alert_store_update_alert_status(ALERT_DB_PATH, alert_id, status, analyst_note)
+        st.session_state["alert_history"] = alert_store_list_alerts(ALERT_DB_PATH, limit=200)
+        st.session_state["alert_history_loaded"] = True
+    except Exception as e:
+        st.warning(f"Khong cap nhat duoc alert store: {e}")
+
 def render_soc_header(title: str, subtitle: str):
     st.markdown(
         f"""
@@ -850,7 +892,7 @@ if page == "[1] Dashboard":
         f"IDS {MODEL_VERSION.upper()} real-time triage workspace | Model, anomaly scoring, MITRE mapping and analyst queue",
     )
 
-    history = st.session_state.get('alert_history', [])
+    history = load_alert_history()
     zd = sum(1 for a in history if a.get('is_zeroday'))
     hi = sum(1 for a in history if a.get('llm_severity') in ['CRITICAL','HIGH'])
     avg_risk = 0
@@ -885,6 +927,8 @@ if page == "[1] Dashboard":
         hist_df = pd.DataFrame([{
             "Alert ID"    : a['alert_id'],
             "Time"        : a['timestamp'],
+            "Status"      : a.get('status', 'new'),
+            "Source"      : a.get('source', 'session'),
             "Severity"    : a.get('llm_severity', 'N/A'),
             "Risk"        : risk_score(a, a.get('llm_severity')),
             "Class"       : a['predicted_class'],
@@ -904,6 +948,19 @@ if page == "[1] Dashboard":
             st.markdown("### OOD Candidate Mix")
             zd_counts = hist_df["OOD Candidate"].value_counts().rename_axis("OOD Candidate").reset_index(name="Count")
             st.bar_chart(zd_counts.set_index("OOD Candidate"))
+
+        st.markdown("### Alert Disposition")
+        selected_alert_id = st.selectbox("Alert", hist_df["Alert ID"].tolist())
+        selected_alert = next((a for a in history if a.get("alert_id") == selected_alert_id), {})
+        status_options = ["new", "triaged", "investigating", "confirmed", "false_positive", "closed"]
+        current_status = selected_alert.get("status", "new")
+        status_idx = status_options.index(current_status) if current_status in status_options else 0
+        d1, d2 = st.columns([0.8, 1.2])
+        new_status = d1.selectbox("Status", status_options, index=status_idx)
+        analyst_note = d2.text_input("Analyst note", value=str(selected_alert.get("analyst_note", "")))
+        if st.button("Update alert status", key="update_alert_status"):
+            update_persisted_alert_status(selected_alert_id, new_status, analyst_note)
+            st.rerun()
     else:
         st.markdown(
             """
@@ -966,11 +1023,7 @@ elif page == "[2] Analyze Alert":
 
                 display_result(result, llm)
 
-                if not result.get("demo_mode"):
-                    if 'alert_history' not in st.session_state:
-                        st.session_state['alert_history'] = []
-                    result['llm_severity'] = llm.get('severity', 'N/A')
-                    st.session_state['alert_history'].append(result)
+                persist_alert(result, llm, source="single")
 
     elif mode == "Nhap thu cong (demo)":
         st.info("Score sandbox chi de minh hoa rule; khong luu vao analyst queue.")
@@ -1154,7 +1207,7 @@ elif page == "[2] Analyze Alert":
                 try:
                     top_idx = result_df['hybrid_score'].idxmax()
                     top_row = result_df.loc[top_idx]
-                    st.session_state['last_alert'] = {
+                    top_alert = {
                         "alert_id": f"BULK-{int(top_idx):06d}",
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "hybrid_score": float(top_row['hybrid_score']),
@@ -1166,6 +1219,10 @@ elif page == "[2] Analyze Alert":
                         "is_zeroday": bool(top_row['is_zeroday']),
                         "demo_mode": False,
                     }
+                    st.session_state['last_alert'] = top_alert
+                    if st.session_state.get("bulk_alert_saved_hash") != file_hash:
+                        persist_alert(top_alert, None, source="batch_top")
+                        st.session_state["bulk_alert_saved_hash"] = file_hash
                 except Exception:
                     pass
 
@@ -1458,7 +1515,7 @@ elif page == "[4] Ask AI":
     )
 
     context_options = runtime_build_ai_context_options(
-        st.session_state.get("alert_history", []),
+        load_alert_history(),
         st.session_state.get("bulk_result_df"),
     )
 
@@ -1617,6 +1674,7 @@ streamlit run app.py
         f"Model file ({os.path.basename(MODEL_PATH)})": os.path.exists(MODEL_PATH),
         f"Pipeline file ({os.path.basename(PIPE_PATH)})": os.path.exists(PIPE_PATH),
         f"Data file ({os.path.basename(DATA_PATH)})": os.path.exists(DATA_PATH),
+        f"Alert DB ({os.path.basename(ALERT_DB_PATH)})": os.path.exists(ALERT_DB_PATH),
         "API Key (Bat ky trong .env)": any([os.getenv("GROQ_API_KEY"), os.getenv("GEMINI_API_KEY"), os.getenv("OPENAI_API_KEY"), os.getenv("ANTHROPIC_API_KEY")]),
         "Module explainer.py": HAS_EXPLAINER,
         "Module mitre_mapper.py": HAS_MITRE,

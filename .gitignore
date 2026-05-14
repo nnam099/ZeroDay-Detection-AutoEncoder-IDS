@@ -5,3 +5,8 @@ checkpoints/
 data/*
 !data/README.md
 .venv/
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
