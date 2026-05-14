@@ -68,7 +68,8 @@ class CFG:
     # Loss
     lambda_con  = 0.3
     focal_gamma = 2.0
-    dos_weight  = 8.0
+    dos_weight  = 3.0
+    recon_dos_penalty = 2.0
 
     # Zero-day
     target_fpr        = 0.05
@@ -530,24 +531,44 @@ class IDSModel(nn.Module):
 # LOSS
 # ═══════════════════════════════════════════════════════════════
 class FocalLoss(nn.Module):
-    def __init__(self, n_classes, gamma=2.5, label_smooth=0.05, class_weights=None):
+    def __init__(self, n_classes, gamma=2.5, label_smooth=0.05, class_weights=None,
+                 dos_class_idx=None, recon_class_idx=None, recon_dos_penalty=2.0):
         super().__init__()
         self.gamma  = gamma
         self.ls     = label_smooth
         self.nc     = n_classes
         self.w      = class_weights
+        self.dos_idx = dos_class_idx
+        self.recon_idx = recon_class_idx
+        self.recon_dos_penalty = float(recon_dos_penalty)
 
     def forward(self, logits, labels):
         ce   = F.cross_entropy(logits, labels, reduction='none',
                                label_smoothing=self.ls, weight=self.w)
         pt   = torch.exp(-ce)
-        return ((1-pt)**self.gamma * ce).mean()
+        loss = (1-pt)**self.gamma * ce
+        if self.dos_idx is not None and self.recon_idx is not None:
+            preds = logits.argmax(dim=1)
+            recon_as_dos = (labels == self.recon_idx) & (preds == self.dos_idx)
+            dos_as_recon = (labels == self.dos_idx) & (preds == self.recon_idx)
+            penalty_mask = recon_as_dos | dos_as_recon
+            if penalty_mask.any():
+                mult = torch.ones_like(loss)
+                mult[penalty_mask] = self.recon_dos_penalty
+                loss = loss * mult
+        return loss.mean()
 
 
 class SupConLoss(nn.Module):
-    def __init__(self, T=0.15):
+    def __init__(self, T=0.15, dos_class_idx=None, recon_class_idx=None,
+                 hard_negative_weight=0.20, hard_negative_topk=64, hard_negative_margin=0.20):
         super().__init__()
         self.T = T
+        self.dos_idx = dos_class_idx
+        self.recon_idx = recon_class_idx
+        self.hn_weight = float(hard_negative_weight)
+        self.hn_topk = int(hard_negative_topk)
+        self.hn_margin = float(hard_negative_margin)
 
     def forward(self, feats, labels):
         B    = feats.shape[0]
@@ -561,22 +582,43 @@ class SupConLoss(nn.Module):
         cnt  = pos.sum(1).clamp(min=1e-8)
         loss = -(pos*lp).sum(1)/cnt
         valid= pos.sum(1) > 0
+        hard_neg = self._recon_dos_hard_negative_loss(feats, labels)
         if not valid.any():
+            return hard_neg
+        return loss[valid].mean() + hard_neg
+
+    def _recon_dos_hard_negative_loss(self, feats, labels):
+        if self.dos_idx is None or self.recon_idx is None or self.hn_weight <= 0:
             return torch.tensor(0.0, device=feats.device, requires_grad=True)
-        return loss[valid].mean()
+        lmat = labels.view(-1, 1)
+        recon_dos = ((lmat == self.recon_idx) & (lmat.T == self.dos_idx)) | \
+                    ((lmat == self.dos_idx) & (lmat.T == self.recon_idx))
+        if not recon_dos.any():
+            return torch.tensor(0.0, device=feats.device, requires_grad=True)
+        cos = torch.matmul(feats, feats.T)
+        hard_scores = cos[recon_dos]
+        if hard_scores.numel() > self.hn_topk:
+            hard_scores = torch.topk(hard_scores, self.hn_topk).values
+        penalty = F.softplus((hard_scores - self.hn_margin) / self.T).mean()
+        return self.hn_weight * penalty
 
 
 class IDSLoss(nn.Module):
     def __init__(self, n_classes, lambda_con=0.3, focal_gamma=2.0,
-                 dos_class_idx=None, dos_weight=5.0, n_features=None, device='cpu'):
+                 dos_class_idx=None, dos_weight=5.0, recon_class_idx=None,
+                 recon_dos_penalty=2.0, n_features=None, device='cpu'):
         super().__init__()
         w = torch.ones(n_classes, device=device)
         if dos_class_idx is not None:
             w[dos_class_idx] = dos_weight
         w = w / w.mean()
         self.focal = FocalLoss(n_classes, gamma=focal_gamma,
-                               label_smooth=0.05, class_weights=w.to(device))
-        self.con   = SupConLoss(T=0.15)
+                               label_smooth=0.05, class_weights=w.to(device),
+                               dos_class_idx=dos_class_idx,
+                               recon_class_idx=recon_class_idx,
+                               recon_dos_penalty=recon_dos_penalty)
+        self.con   = SupConLoss(T=0.15, dos_class_idx=dos_class_idx,
+                                recon_class_idx=recon_class_idx)
         self.lam   = lambda_con
         self.ae_loss_fn = nn.MSELoss()
 
@@ -701,7 +743,59 @@ def eval_epoch(model, loader, device):
     return {'auc':auc, 'acc':(probs.argmax(1)==labels).mean()}
 
 
-def train(model, loaders, args, criterion, device):
+@torch.no_grad()
+def _collect_loader_predictions(model, loader, device):
+    model.eval()
+    preds, labels = [], []
+    for X, y in loader:
+        logits, _ = model(X.to(device))
+        preds.append(logits.argmax(1).cpu().numpy())
+        labels.append(y.numpy())
+    return np.concatenate(labels), np.concatenate(preds)
+
+
+def _format_class_name(label_names, idx):
+    if label_names and idx < len(label_names):
+        return str(label_names[idx])
+    return f'Class_{idx}'
+
+
+def log_top_confusions(model, loader, device, label_names=None, epoch=None, top_k=2):
+    labels, preds = _collect_loader_predictions(model, loader, device)
+    n_classes = len(label_names) if label_names else int(max(labels.max(), preds.max()) + 1)
+    cm = confusion_matrix(labels, preds, labels=list(range(n_classes)))
+    rows = []
+    for true_idx in range(n_classes):
+        row_total = int(cm[true_idx].sum())
+        if row_total == 0:
+            continue
+        for pred_idx in range(n_classes):
+            if pred_idx == true_idx:
+                continue
+            count = int(cm[true_idx, pred_idx])
+            if count <= 0:
+                continue
+            rows.append({
+                'true': _format_class_name(label_names, true_idx),
+                'pred': _format_class_name(label_names, pred_idx),
+                'count': count,
+                'row_pct': 100.0 * count / row_total,
+            })
+    rows = sorted(rows, key=lambda r: (r['count'], r['row_pct']), reverse=True)[:top_k]
+    title = 'Top validation confusions'
+    if epoch is not None:
+        title += f' @ epoch {epoch}'
+    print(f'\n  {title}')
+    print(f'  {"True":<18} {"Pred":<18} {"Count":>7} {"Row%":>8}')
+    print(f'  {"-"*55}')
+    if not rows:
+        print(f'  {"<none>":<18} {"<none>":<18} {0:>7} {0.0:>7.1f}%')
+    for item in rows:
+        print(f'  {item["true"]:<18} {item["pred"]:<18} {item["count"]:>7} {item["row_pct"]:>7.1f}%')
+    return rows
+
+
+def train(model, loaders, args, criterion, device, label_names=None):
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     def warmup_cos(ep):
         warmup=5
@@ -719,6 +813,7 @@ def train(model, loaders, args, criterion, device):
         t0  = time.time()
         trm = train_epoch(model, loaders['train'], optimizer, criterion, device)
         vam = eval_epoch(model,  loaders['val'],   device)
+        log_top_confusions(model, loaders['val'], device, label_names=label_names, epoch=ep, top_k=2)
         sched.step()
         is_best = vam['auc'] > best_auc
         if is_best:
@@ -807,6 +902,26 @@ def build_centroids(model, X_tr, y_tr, n_clusters=25, device='cpu', seed=42):
     c = np.concatenate(centers)
     print(f'  Centroids: {len(c)}')
     return torch.FloatTensor(c).to(device)
+
+
+@torch.no_grad()
+def class_prototype_cosine_similarity(model, X, y, class_a, class_b, device='cpu', batch=512):
+    model.eval()
+    emb, labels = [], []
+    y = np.asarray(y)
+    for i in range(0, len(X), batch):
+        x = torch.FloatTensor(X[i:i+batch]).to(device)
+        emb.append(model.get_embed(x).detach().cpu())
+        labels.append(torch.LongTensor(y[i:i+batch]))
+    emb = torch.cat(emb, dim=0)
+    labels = torch.cat(labels, dim=0)
+    mask_a = labels == int(class_a)
+    mask_b = labels == int(class_b)
+    if not mask_a.any() or not mask_b.any():
+        raise ValueError('Both classes must have at least one sample')
+    proto_a = F.normalize(emb[mask_a].mean(dim=0), dim=0)
+    proto_b = F.normalize(emb[mask_b].mean(dim=0), dim=0)
+    return float(torch.dot(proto_a, proto_b).item())
 
 
 def calibrate(model, X_val, y_val, target_fpr, device, centroids):
@@ -1160,9 +1275,13 @@ def run_full(args):
                             zd_augment=getattr(args,'zd_augment_factor',1))
 
     le = splits['label_encoder']
+    label_names = list(le.classes_)
     dos_idx = None
-    if 'DoS' in list(le.classes_):
+    recon_idx = None
+    if 'DoS' in label_names:
         dos_idx = int(le.transform(['DoS'])[0])
+    if 'Reconnaissance' in label_names:
+        recon_idx = int(le.transform(['Reconnaissance'])[0])
 
     print('\n[3/8] Creating loaders...')
     loaders = make_loaders(splits, batch_size=args.batch_size,
@@ -1180,12 +1299,14 @@ def run_full(args):
     criterion = IDSLoss(
         n_classes=splits['n_classes'], lambda_con=args.lambda_con,
         focal_gamma=args.focal_gamma,  dos_class_idx=dos_idx,
-        dos_weight=args.dos_weight,    n_features=splits['n_features'],
+        dos_weight=args.dos_weight,    recon_class_idx=recon_idx,
+        recon_dos_penalty=getattr(args, 'recon_dos_penalty', 2.0),
+        n_features=splits['n_features'],
         device=device,
     )
 
     print('\n[5/8] Training...')
-    model, history = train(model, loaders, args, criterion, device)
+    model, history = train(model, loaders, args, criterion, device, label_names=label_names)
 
     print('\n[6/8] Building centroids + calibrating thresholds...')
     centroids  = build_centroids(model, splits['X_train'], splits['y_train'],
@@ -1205,7 +1326,6 @@ def run_full(args):
     p_thr  = 0.5
 
     print('\n[7/8] Evaluating...')
-    label_names = list(le.classes_)
     normal_idx  = label_names.index('Normal') if 'Normal' in label_names else 0
     clf_res     = evaluate_classifier(model, splits['X_test'], splits['y_test'],
                                        label_names, device)
@@ -1324,17 +1444,18 @@ def run_demo(args):
     args.hidden   = getattr(args, 'hidden', 128)
 
     criterion = IDSLoss(n_classes=n_cls, lambda_con=0.3, focal_gamma=2.0,
-                        dos_class_idx=dos_idx_demo, dos_weight=5.0, device=device)
+                        dos_class_idx=dos_idx_demo, dos_weight=getattr(args, 'dos_weight', 3.0),
+                        device=device)
     loaders = make_loaders(splits, batch_size=256, num_workers=0,
                            dos_class_idx=dos_idx_demo,
                            seed=getattr(args, 'seed', 42))
-    model, history = train(model, loaders, args, criterion, device)
+    label_names = [f'Class_{i}' for i in range(n_cls)]
+    model, history = train(model, loaders, args, criterion, device, label_names=label_names)
 
     centroids  = build_centroids(model, X_tr, y_tr, 10, device,
                                  seed=getattr(args, 'seed', 42))
     thresholds = calibrate(model, X_va, y_va, args.target_fpr, device, centroids)
 
-    label_names = [f'Class_{i}' for i in range(n_cls)]
     clf_res     = evaluate_classifier(model, X_te, y_te, label_names, device)
     clf_res['y_test'] = y_te
     zd_res      = evaluate_zero_day(model, X_te, y_te, X_zd, y_zd,

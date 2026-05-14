@@ -21,8 +21,8 @@ Main flow:
 ## Current Status
 
 - v14 is the operational default because local artifacts exist in `checkpoints/`.
-- `scripts/smoke_check.py` passes locally with 30 tests.
-- Smoke coverage includes artifact contract validation, threshold metadata validation, artifact manifest hashing, duplicate feature-name rejection, environment readiness checks, export config handling, checkpoint metadata patch logic, SQLite alert store persistence, CSV input guardrails, CSV normalization quality checks, dashboard preprocessing/context contracts, AI context selection, alert queue filtering, top-N batch alert selection, alert entity enrichment, lightweight correlation, LLM fallback behavior, MITRE mapping and v14 artifact loading.
+- `scripts/smoke_check.py` passes locally with 31 tests.
+- Smoke coverage includes artifact contract validation, threshold metadata validation, artifact manifest hashing, duplicate feature-name rejection, environment readiness checks, export config handling, checkpoint metadata patch logic, SQLite alert store persistence, CSV input guardrails, CSV normalization quality checks, dashboard preprocessing/context contracts, AI context selection, alert queue filtering, top-N batch alert selection, alert entity enrichment, lightweight correlation, Recon/DoS prototype separation, LLM fallback behavior, MITRE mapping and v14 artifact loading.
 - `llm_agent.py` lazy-loads provider clients, so importing dashboard code does not require an API key.
 - A Windows GitHub Actions smoke workflow is available at `.github/workflows/smoke.yml`.
 - A basic Dockerfile is available for dashboard deployment experiments.

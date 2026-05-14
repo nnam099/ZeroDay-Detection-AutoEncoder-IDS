@@ -743,6 +743,40 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertEqual(features.shape[0], 2)
         self.assertEqual(tuple(ae_score.shape), (2,))
 
+    def test_recon_dos_separation(self):
+        from ids_v14_unswnb15 import SupConLoss, class_prototype_cosine_similarity
+
+        class TinyProbe(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear = torch.nn.Linear(2, 2, bias=False)
+                with torch.no_grad():
+                    self.linear.weight.copy_(torch.eye(2))
+
+            def get_embed(self, x):
+                return torch.nn.functional.normalize(self.linear(x), dim=-1)
+
+        x = torch.tensor([[1.0, 0.0], [0.9, 0.1], [-1.0, 0.0], [-0.9, -0.1]], dtype=torch.float32)
+        y = torch.tensor([0, 0, 1, 1], dtype=torch.long)
+        model = TinyProbe()
+        criterion = SupConLoss(
+            T=0.20,
+            recon_class_idx=0,
+            dos_class_idx=1,
+            hard_negative_weight=1.0,
+        )
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.05)
+
+        for _ in range(8):
+            optimizer.zero_grad(set_to_none=True)
+            loss = criterion(model.get_embed(x), y)
+            loss.backward()
+            optimizer.step()
+
+        sim = class_prototype_cosine_similarity(model, x.numpy(), y.numpy(), class_a=0, class_b=1)
+
+        self.assertLess(sim, 0.5)
+
 
 if __name__ == "__main__":
     unittest.main()
