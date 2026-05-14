@@ -27,51 +27,175 @@ st.set_page_config(
 st.markdown("""
 <style>
     :root {
-        --soc-bg: #090d12;
-        --soc-panel: #111821;
-        --soc-panel-2: #16202b;
-        --soc-line: #263241;
-        --soc-text: #d6dde6;
-        --soc-muted: #8b98a7;
-        --soc-blue: #3aa0ff;
-        --soc-green: #37d67a;
+        --soc-bg: #0b0e11;
+        --soc-bg-2: #11161b;
+        --soc-panel: #161b21;
+        --soc-panel-2: #1d242c;
+        --soc-panel-3: #232b34;
+        --soc-line: #303943;
+        --soc-line-strong: #46515d;
+        --soc-text: #e8edf2;
+        --soc-muted: #9ba7b4;
+        --soc-dim: #6f7b88;
+        --soc-cyan: #39b7e8;
+        --soc-orange: #ff9f1c;
+        --soc-green: #42d392;
         --soc-yellow: #f6c343;
-        --soc-red: #ff4d5e;
+        --soc-red: #ff5f6d;
     }
-    .stApp { background: var(--soc-bg); color: var(--soc-text); }
-    section[data-testid="stSidebar"] { background: #0b1118; border-right: 1px solid var(--soc-line); }
+    html, body, [class*="css"] {
+        font-family: Inter, "Segoe UI", Roboto, Arial, sans-serif;
+    }
+    .stApp {
+        background:
+            linear-gradient(180deg, rgba(22, 27, 33, 0.95) 0%, rgba(11, 14, 17, 1) 36%),
+            var(--soc-bg);
+        color: var(--soc-text);
+    }
+    .block-container {
+        padding-top: 1.1rem;
+        padding-bottom: 2.2rem;
+        max-width: 1680px;
+    }
+    section[data-testid="stSidebar"] {
+        background: #0f1318;
+        border-right: 1px solid var(--soc-line);
+    }
+    section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] {
+        gap: 0.65rem;
+    }
+    section[data-testid="stSidebar"] label,
+    section[data-testid="stSidebar"] p {
+        color: var(--soc-muted);
+    }
+    h1, h2, h3 {
+        color: var(--soc-text);
+        letter-spacing: 0;
+    }
+    h3 {
+        font-size: 1.02rem;
+        margin-top: 1.1rem;
+        padding-bottom: 0.35rem;
+        border-bottom: 1px solid var(--soc-line);
+    }
+    hr {
+        border-color: var(--soc-line);
+    }
     div[data-testid="stMetric"] {
         background: var(--soc-panel);
         border: 1px solid var(--soc-line);
-        border-radius: 6px;
-        padding: 12px 14px;
+        border-left: 3px solid var(--soc-cyan);
+        border-radius: 4px;
+        padding: 13px 15px;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
     }
-    div[data-testid="stMetricLabel"] p { color: var(--soc-muted); font-size: 0.78rem; text-transform: uppercase; }
+    div[data-testid="stMetricLabel"] p {
+        color: var(--soc-muted);
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        font-weight: 700;
+    }
+    div[data-testid="stMetricValue"] {
+        color: var(--soc-text);
+        font-weight: 750;
+    }
+    div[data-testid="stDataFrame"] {
+        border: 1px solid var(--soc-line);
+        border-radius: 4px;
+        overflow: hidden;
+        background: var(--soc-panel);
+    }
+    div[data-testid="stTabs"] button {
+        color: var(--soc-muted);
+        border-radius: 3px 3px 0 0;
+    }
+    div[data-testid="stTabs"] button[aria-selected="true"] {
+        color: var(--soc-text);
+        border-bottom-color: var(--soc-orange);
+    }
+    .stButton > button,
+    .stDownloadButton > button {
+        border-radius: 4px;
+        border: 1px solid var(--soc-line-strong);
+        background: var(--soc-panel-2);
+        color: var(--soc-text);
+        font-weight: 650;
+    }
+    .stButton > button:hover,
+    .stDownloadButton > button:hover {
+        border-color: var(--soc-cyan);
+        color: #ffffff;
+        background: #26313b;
+    }
+    .stButton > button[kind="primary"] {
+        background: #1f5f7a;
+        border-color: var(--soc-cyan);
+    }
+    div[data-baseweb="select"] > div,
+    div[data-baseweb="input"] > div,
+    textarea,
+    input {
+        background: #11161b !important;
+        border-color: var(--soc-line) !important;
+        border-radius: 4px !important;
+        color: var(--soc-text) !important;
+    }
+    div[data-testid="stAlert"] {
+        border-radius: 4px;
+        border: 1px solid var(--soc-line);
+        background: var(--soc-panel);
+    }
     .soc-header {
         border: 1px solid var(--soc-line);
-        background: linear-gradient(90deg, #101a24 0%, #0d141c 100%);
-        border-radius: 6px;
-        padding: 14px 18px;
-        margin-bottom: 14px;
+        border-left: 4px solid var(--soc-orange);
+        background: linear-gradient(90deg, #171d23 0%, #10151a 100%);
+        border-radius: 4px;
+        padding: 15px 18px;
+        margin-bottom: 16px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.22);
     }
-    .soc-title { font-size: 1.35rem; font-weight: 700; margin: 0; }
-    .soc-subtitle { color: var(--soc-muted); margin-top: 4px; font-size: 0.88rem; }
+    .soc-title {
+        font-size: 1.34rem;
+        font-weight: 760;
+        margin: 0;
+    }
+    .soc-subtitle {
+        color: var(--soc-muted);
+        margin-top: 4px;
+        font-size: 0.88rem;
+    }
+    .soc-topline {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+    }
+    .soc-kicker {
+        color: var(--soc-orange);
+        font-size: 0.70rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        margin-bottom: 4px;
+    }
     .soc-panel {
         border: 1px solid var(--soc-line);
         background: var(--soc-panel);
-        border-radius: 6px;
-        padding: 14px;
+        border-radius: 4px;
+        padding: 14px 16px;
         margin-bottom: 12px;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.025);
     }
     .soc-badge {
         display: inline-block;
         border: 1px solid var(--soc-line);
-        border-radius: 4px;
-        padding: 2px 7px;
-        font-size: 0.75rem;
+        border-radius: 3px;
+        padding: 3px 8px;
+        font-size: 0.72rem;
+        font-weight: 700;
         color: var(--soc-text);
         background: var(--soc-panel-2);
         margin-right: 6px;
+        margin-bottom: 4px;
     }
     .soc-detail-title {
         color: var(--soc-muted);
@@ -86,43 +210,52 @@ st.markdown("""
         font-weight: 650;
         margin-bottom: 10px;
     }
-    .soc-pill-red { border-color: rgba(255,77,94,0.5); color: #ff8d99; }
-    .soc-pill-blue { border-color: rgba(58,160,255,0.5); color: #8bc9ff; }
-    .soc-pill-green { border-color: rgba(55,214,122,0.5); color: #8cf0b5; }
+    .soc-pill-red { border-color: rgba(255,95,109,0.55); color: #ff9aa4; background: rgba(255,95,109,0.10); }
+    .soc-pill-blue { border-color: rgba(57,183,232,0.55); color: #8bdcff; background: rgba(57,183,232,0.10); }
+    .soc-pill-green { border-color: rgba(66,211,146,0.55); color: #93efc5; background: rgba(66,211,146,0.10); }
+    .soc-pill-orange { border-color: rgba(255,159,28,0.55); color: #ffc66f; background: rgba(255,159,28,0.10); }
     .sidebar-brand {
         border: 1px solid var(--soc-line);
-        background: #0f1720;
-        border-radius: 8px;
-        padding: 14px 12px;
+        border-left: 4px solid var(--soc-orange);
+        background: #151a20;
+        border-radius: 4px;
+        padding: 14px 12px 12px 12px;
         margin: 6px 0 14px 0;
     }
-    .sidebar-brand-title { font-size: 1.05rem; font-weight: 750; color: #f4f8fc; }
-    .sidebar-brand-sub { color: var(--soc-muted); font-size: 0.74rem; margin-top: 4px; }
+    .sidebar-brand-title {
+        font-size: 1.05rem;
+        font-weight: 800;
+        color: #f4f8fc;
+    }
+    .sidebar-brand-sub {
+        color: var(--soc-muted);
+        font-size: 0.74rem;
+        margin-top: 4px;
+    }
     .health-grid {
         display: grid;
         grid-template-columns: 1fr auto;
         gap: 8px 10px;
         align-items: center;
         border: 1px solid var(--soc-line);
-        border-radius: 8px;
+        border-radius: 4px;
         padding: 12px;
-        background: #0f1720;
+        background: #151a20;
     }
     .health-label { color: var(--soc-muted); font-size: 0.75rem; text-transform: uppercase; }
     .health-ok, .health-warn, .health-bad {
-        border-radius: 999px;
-        padding: 2px 8px;
+        border-radius: 3px;
+        padding: 2px 7px;
         font-size: 0.70rem;
         font-weight: 700;
     }
-    .health-ok { color: #8cf0b5; background: rgba(55,214,122,0.10); border: 1px solid rgba(55,214,122,0.35); }
+    .health-ok { color: #93efc5; background: rgba(66,211,146,0.10); border: 1px solid rgba(66,211,146,0.35); }
     .health-warn { color: #ffd77a; background: rgba(246,195,67,0.10); border: 1px solid rgba(246,195,67,0.35); }
-    .health-bad { color: #ff9ca6; background: rgba(255,77,94,0.10); border: 1px solid rgba(255,77,94,0.35); }
+    .health-bad { color: #ff9ca6; background: rgba(255,95,109,0.10); border: 1px solid rgba(255,95,109,0.35); }
     .sev-critical { color: var(--soc-red); font-weight: 700; }
     .sev-high { color: #ff9b55; font-weight: 700; }
     .sev-medium { color: var(--soc-yellow); font-weight: 700; }
     .sev-low { color: var(--soc-green); font-weight: 700; }
-    .block-container { padding-top: 1.4rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -325,8 +458,8 @@ if "nav_page" not in st.session_state:
 st.sidebar.markdown(
     f"""
     <div class="sidebar-brand">
-        <div class="sidebar-brand-title">SOC AI Platform</div>
-        <div class="sidebar-brand-sub">IDS {MODEL_VERSION.upper()} | SHAP | MITRE ATT&CK | LLM</div>
+        <div class="sidebar-brand-title">SOC AI Workbench</div>
+        <div class="sidebar-brand-sub">IDS {MODEL_VERSION.upper()} | Detection | Triage | Response</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -749,8 +882,18 @@ def render_soc_header(title: str, subtitle: str):
     st.markdown(
         f"""
         <div class="soc-header">
-            <div class="soc-title">{title}</div>
-            <div class="soc-subtitle">{subtitle}</div>
+            <div class="soc-kicker">SOC Workbench</div>
+            <div class="soc-topline">
+                <div>
+                    <div class="soc-title">{title}</div>
+                    <div class="soc-subtitle">{subtitle}</div>
+                </div>
+                <div>
+                    <span class="soc-badge soc-pill-orange">IDS {MODEL_VERSION.upper()}</span>
+                    <span class="soc-badge soc-pill-blue">AI TRIAGE</span>
+                    <span class="soc-badge soc-pill-green">QUEUE</span>
+                </div>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
