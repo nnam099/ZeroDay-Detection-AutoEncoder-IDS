@@ -93,6 +93,13 @@ Recommended:
 - Python 3.9+ for local work. Python 3.11 is used by CI.
 - Windows PowerShell or a Unix-like shell.
 
+Clone the correct repository:
+
+```powershell
+git clone https://github.com/nnam099/ZeroDay-Detection-AutoEncoder-IDS.git
+cd ZeroDay-Detection-AutoEncoder-IDS
+```
+
 Create/activate a virtual environment, then install dependencies:
 
 ```powershell
@@ -144,6 +151,16 @@ data/
 ```
 
 `data/` is ignored by git because it is large and local.
+
+## Reproducibility
+
+- Runtime packages are pinned in `requirements.txt`; test-only packages are pinned in `requirements-dev.txt`.
+- v14 training defaults to seed `42`. Override it with `--seed` when running `train.py` or `src/ids_v14_unswnb15.py`.
+- Data splits, PyTorch, NumPy, Python hashing and DataLoader workers are seeded through `seed_everything()` and seeded worker initialization.
+- Local artifacts are intentionally not committed: `checkpoints/*.pth`, `checkpoints/*.pkl`, CSV datasets and SQLite files can be large or environment-specific.
+- Use `scripts/artifact_manifest.py` after training to record local artifact hashes.
+
+Pretrained artifacts are not currently published in this repository. For demos, train/export artifacts locally or attach a trusted release asset, Hugging Face artifact, Google Drive file or internal model registry object, then point runtime tools at it with `IDS_MODEL_PATH` and `IDS_PIPELINE_PATH`.
 
 ## Run Dashboard
 
@@ -308,6 +325,17 @@ $env:PYTHONUTF8="1"
 $env:PYTHONIOENCODING="utf-8"
 python scripts/smoke_check.py
 ```
+
+## Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| `IDS_MODEL_PATH must be set` | Set `IDS_MODEL_PATH` and `IDS_PIPELINE_PATH` before starting `uvicorn src.serve:app`. |
+| `expected N features, received M` | Send exactly the feature count saved in the checkpoint/pipeline; current local v14 artifacts use 61 features. |
+| Dashboard starts in demo mode | Confirm `checkpoints/ids_v14_model.pth` and `checkpoints/ids_v14_pipeline.pkl` exist or set explicit artifact paths. |
+| Too many zero-day candidates on a new CSV | Run `scripts/evaluate_csv.py --calibrate-thresholds` on labeled benign rows and load the generated threshold profile. |
+| Import or console encoding errors on Windows paths | Set `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8`; `scripts/smoke_check.py` already does this for subprocesses. |
+| Docker container cannot find artifacts | Mount `checkpoints/` into `/app/checkpoints` or build a deployment-specific image that includes trusted artifacts. |
 
 ## Evaluate and Calibrate CSV Drift
 

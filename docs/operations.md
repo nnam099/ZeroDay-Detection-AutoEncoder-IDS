@@ -32,12 +32,18 @@ Or use the PowerShell launcher:
 .\scripts\run_dashboard.ps1
 ```
 
-Docker option:
+FastAPI Docker option:
 
 ```powershell
-docker build -t zeroday-ids .
-docker run --rm -p 8501:8501 --env-file .env -v ${PWD}/checkpoints:/app/checkpoints -v ${PWD}/data:/app/data zeroday-ids
+docker build -t ids-v14-serve .
+docker run --rm -p 8080:8080 `
+  -v ${PWD}/checkpoints:/app/checkpoints:ro `
+  -e IDS_MODEL_PATH=/app/checkpoints/ids_v14_model.pth `
+  -e IDS_PIPELINE_PATH=/app/checkpoints/ids_v14_pipeline.pkl `
+  ids-v14-serve
 ```
+
+The Dockerfile runs `uvicorn src.serve:app` on port `8080`. Run the Streamlit dashboard directly with `streamlit run dashboard/app.py` for interactive SOC demos.
 
 Upload CSV files with flow-like fields when possible:
 
@@ -51,7 +57,13 @@ The dashboard rejects empty, oversized or malformed CSVs and warns when feature 
 
 ## Artifact Handling
 
-Checkpoint and pipeline files are local runtime artifacts and are not committed. After training or replacing artifacts, regenerate the manifest:
+Checkpoint and pipeline files are local runtime artifacts and are not committed. For reproducible demos, keep artifacts in one of these places:
+
+- local `checkpoints/` plus a checked manifest
+- GitHub release assets
+- Hugging Face, Google Drive or an internal model registry
+
+After training or replacing artifacts, regenerate the manifest:
 
 ```powershell
 python scripts/artifact_manifest.py
@@ -74,6 +86,7 @@ If no provider key is configured, the dashboard still runs and returns determini
 Before production use, add:
 
 - authentication and authorization for the dashboard
+- authentication and rate limiting for the FastAPI server
 - signed/trusted artifact storage
 - monitored deployment and audit logging
 - calibrated metrics from the current training code
