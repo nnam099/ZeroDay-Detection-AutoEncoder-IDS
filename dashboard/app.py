@@ -53,9 +53,8 @@ st.markdown("""
         color: var(--soc-text);
     }
     .block-container {
-        padding-top: 1.1rem;
-        padding-bottom: 2.2rem;
-        max-width: 1680px;
+        padding: 1rem 1.5rem 2.2rem 1.5rem;
+        max-width: 100%;
     }
     section[data-testid="stSidebar"] {
         background: #0f1318;
@@ -150,9 +149,10 @@ st.markdown("""
         border-left: 4px solid var(--soc-orange);
         background: linear-gradient(90deg, #171d23 0%, #10151a 100%);
         border-radius: 4px;
-        padding: 15px 18px;
+        padding: 18px 18px 16px 18px;
         margin-bottom: 16px;
         box-shadow: 0 10px 28px rgba(0,0,0,0.22);
+        overflow: visible;
     }
     .soc-title {
         font-size: 1.34rem;
@@ -166,16 +166,26 @@ st.markdown("""
     }
     .soc-topline {
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         justify-content: space-between;
         gap: 12px;
+        flex-wrap: wrap;
     }
     .soc-kicker {
+        display: block;
         color: var(--soc-orange);
         font-size: 0.70rem;
+        line-height: 1.25;
         font-weight: 800;
         text-transform: uppercase;
-        margin-bottom: 4px;
+        margin-bottom: 7px;
+        white-space: nowrap;
+    }
+    .soc-header-actions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 4px;
     }
     .soc-panel {
         border: 1px solid var(--soc-line);
@@ -888,7 +898,7 @@ def render_soc_header(title: str, subtitle: str):
                     <div class="soc-title">{title}</div>
                     <div class="soc-subtitle">{subtitle}</div>
                 </div>
-                <div>
+                <div class="soc-header-actions">
                     <span class="soc-badge soc-pill-orange">IDS {MODEL_VERSION.upper()}</span>
                     <span class="soc-badge soc-pill-blue">AI TRIAGE</span>
                     <span class="soc-badge soc-pill-green">QUEUE</span>
