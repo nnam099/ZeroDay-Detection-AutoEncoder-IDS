@@ -184,6 +184,7 @@ def build_top_batch_alerts(
     file_hash: str,
     limit: int = 25,
     timestamp: str | None = None,
+    raw_df: pd.DataFrame | None = None,
 ) -> list[dict[str, Any]]:
     if not isinstance(result_df, pd.DataFrame) or result_df.empty or limit <= 0:
         return []
@@ -205,8 +206,44 @@ def build_top_batch_alerts(
         alert["alert_id"] = f"BATCH-{prefix}-{source_row:06d}"
         alert["source_file_hash"] = file_hash
         alert["source"] = "batch_top"
+        if isinstance(raw_df, pd.DataFrame) and source_row < len(raw_df):
+            alert.update(extract_alert_entities(raw_df.iloc[source_row].to_dict()))
         alerts.append(alert)
     return alerts
+
+
+def extract_alert_entities(row: dict[str, Any]) -> dict[str, str]:
+    return {
+        "src_ip": _first_present_value(row, ["srcip", "src_ip", "source_ip", "source.address", "sourceip", "id.orig_h"]),
+        "dst_ip": _first_present_value(row, ["dstip", "dst_ip", "destination_ip", "dest_ip", "destination.address", "id.resp_h"]),
+        "src_port": _first_present_value(row, ["sport", "src_port", "source_port", "source.port", "id.orig_p"]),
+        "dst_port": _first_present_value(row, ["dsport", "dst_port", "destination_port", "dest_port", "destination.port", "id.resp_p"]),
+        "protocol": _first_present_value(row, ["proto", "protocol", "transport", "network.transport"]),
+        "service": _first_present_value(row, ["service", "app_proto", "application", "app", "protocol_name"]),
+    }
+
+
+def correlate_alerts(alerts: list[dict[str, Any]], min_count: int = 2) -> list[dict[str, Any]]:
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for alert in alerts:
+        for group_type, key in _correlation_keys(alert):
+            groups.setdefault((group_type, key), []).append(alert)
+
+    out: list[dict[str, Any]] = []
+    for (group_type, key), members in groups.items():
+        if len(members) < min_count:
+            continue
+        out.append({
+            "group_type": group_type,
+            "key": key,
+            "alert_count": len(members),
+            "ood_count": sum(1 for item in members if bool(item.get("is_zeroday"))),
+            "max_risk": max(_safe_float(item.get("risk"), default=0.0) for item in members),
+            "latest_time": max(str(item.get("timestamp", "")) for item in members),
+            "alert_ids": [str(item.get("alert_id", "")) for item in members[:10]],
+        })
+
+    return sorted(out, key=lambda item: (item["alert_count"], item["ood_count"], item["max_risk"]), reverse=True)
 
 
 def default_ai_context_index(options: list[AIContextOption], current_alert_id: str | None) -> int:
@@ -273,3 +310,39 @@ def _encode_categorical_column(series: pd.Series, mapping=None) -> np.ndarray:
         return values.map(lambda x: mapping.get(x, mapping.get("unk", -1))).astype(np.float32).values
     codes, _ = pd.factorize(values, sort=True)
     return codes.astype(np.float32)
+
+
+def _first_present_value(row: dict[str, Any], names: list[str]) -> str:
+    lower = {str(key).strip().lower(): value for key, value in row.items()}
+    for name in names:
+        value = lower.get(name.lower())
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text and text.lower() not in {"nan", "none", "null", "-", "unknown"}:
+            return text
+    return ""
+
+
+def _correlation_keys(alert: dict[str, Any]) -> list[tuple[str, str]]:
+    candidates = [
+        ("Source IP", alert.get("src_ip")),
+        ("Destination IP", alert.get("dst_ip")),
+        ("Service", alert.get("service")),
+        ("Classifier Class", alert.get("classifier_class")),
+        ("Zero-Day Family", alert.get("zero_day_family")),
+        ("Batch File", alert.get("source_file_hash")),
+    ]
+    out = []
+    for group_type, value in candidates:
+        text = str(value or "").strip()
+        if text and text.lower() not in {"normal", "nan", "none", "null", "-", "unknown"}:
+            out.append((group_type, text))
+    return out
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default

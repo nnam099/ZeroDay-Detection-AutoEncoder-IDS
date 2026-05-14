@@ -547,6 +547,51 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertEqual(alerts[1]["alert_id"], "BATCH-abcdef12-000001")
         self.assertEqual(alerts[0]["source_file_hash"], "abcdef123456")
 
+    def test_dashboard_runtime_enriches_batch_alert_entities(self):
+        from dashboard_runtime import build_top_batch_alerts
+
+        scores = pd.DataFrame({
+            "source_row": [0],
+            "detection": ["Zero-Day Candidate"],
+            "classifier_class": ["DoS"],
+            "hybrid_score": [0.9],
+            "ae_score": [0.8],
+            "max_prob": [0.2],
+            "is_zeroday": [True],
+        })
+        raw = pd.DataFrame({
+            "src_ip": ["10.0.0.5"],
+            "dst_ip": ["172.16.1.10"],
+            "src_port": [52512],
+            "dst_port": [443],
+            "protocol": ["tcp"],
+            "service": ["https"],
+        })
+
+        alert = build_top_batch_alerts(scores, file_hash="abcdef123456", raw_df=raw)[0]
+
+        self.assertEqual(alert["src_ip"], "10.0.0.5")
+        self.assertEqual(alert["dst_ip"], "172.16.1.10")
+        self.assertEqual(alert["dst_port"], "443")
+        self.assertEqual(alert["service"], "https")
+
+    def test_dashboard_runtime_correlates_alerts(self):
+        from dashboard_runtime import correlate_alerts
+
+        alerts = [
+            {"alert_id": "A1", "src_ip": "10.0.0.5", "classifier_class": "DoS", "is_zeroday": True, "risk": 90, "timestamp": "2026-05-14 10:00:00"},
+            {"alert_id": "A2", "src_ip": "10.0.0.5", "classifier_class": "DoS", "is_zeroday": False, "risk": 60, "timestamp": "2026-05-14 10:01:00"},
+            {"alert_id": "A3", "src_ip": "10.0.0.8", "classifier_class": "Normal", "is_zeroday": False, "risk": 10, "timestamp": "2026-05-14 10:02:00"},
+        ]
+
+        groups = correlate_alerts(alerts, min_count=2)
+
+        self.assertTrue(any(g["group_type"] == "Source IP" and g["key"] == "10.0.0.5" for g in groups))
+        dos_group = next(g for g in groups if g["group_type"] == "Classifier Class" and g["key"] == "DoS")
+        self.assertEqual(dos_group["alert_count"], 2)
+        self.assertEqual(dos_group["ood_count"], 1)
+        self.assertEqual(dos_group["max_risk"], 90)
+
     def test_zero_day_vote_decision_requires_multiple_signals(self):
         from inference_runtime import zero_day_decision
 

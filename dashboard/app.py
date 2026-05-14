@@ -239,6 +239,7 @@ from dashboard_runtime import (
     build_alert_context_from_log as runtime_build_alert_context_from_log,
     build_ai_context_options as runtime_build_ai_context_options,
     build_top_batch_alerts as runtime_build_top_batch_alerts,
+    correlate_alerts as runtime_correlate_alerts,
     default_ai_context_index as runtime_default_ai_context_index,
     filter_alert_history as runtime_filter_alert_history,
     preprocess_dashboard_df as runtime_preprocess_dashboard_df,
@@ -972,6 +973,20 @@ if page == "[1] Dashboard":
                 zd_counts = hist_df["OOD Candidate"].value_counts().rename_axis("OOD Candidate").reset_index(name="Count")
                 st.bar_chart(zd_counts.set_index("OOD Candidate"))
 
+            correlations = runtime_correlate_alerts(filtered_history, min_count=2)
+            if correlations:
+                st.markdown("### Correlated Alert Groups")
+                corr_df = pd.DataFrame([{
+                    "Group": item["group_type"],
+                    "Key": item["key"],
+                    "Alerts": item["alert_count"],
+                    "OOD": item["ood_count"],
+                    "Max Risk": int(item["max_risk"]),
+                    "Latest": item["latest_time"],
+                    "Sample Alert IDs": ", ".join(item["alert_ids"]),
+                } for item in correlations[:25]])
+                st.dataframe(corr_df, width="stretch", hide_index=True)
+
             st.markdown("### Alert Disposition")
             selected_alert_id = st.selectbox("Alert", hist_df["Alert ID"].tolist())
             selected_alert = next((a for a in history if a.get("alert_id") == selected_alert_id), {})
@@ -1243,6 +1258,7 @@ elif page == "[2] Analyze Alert":
                         file_hash=file_hash,
                         limit=int(persist_top_n),
                         timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        raw_df=st.session_state.get('bulk_raw_df'),
                     )
                     if batch_alerts:
                         st.session_state['last_alert'] = batch_alerts[0]
