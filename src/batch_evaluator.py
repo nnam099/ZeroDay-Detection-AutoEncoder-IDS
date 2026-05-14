@@ -11,7 +11,12 @@ import numpy as np
 import pandas as pd
 import torch
 
-from inference_runtime import ground_truth_verdict, traffic_verdict, zero_day_decision
+from inference_runtime import (
+    ground_truth_verdict,
+    hybrid_score_from_meta,
+    traffic_verdict,
+    zero_day_decision,
+)
 from log_normalizer import normalize_real_world_logs
 
 
@@ -54,6 +59,9 @@ def load_ids_artifacts(model_path: str, pipeline_path: str, model_version: str =
     class_names = [str(item) for item in label_classes] if label_classes is not None else []
     feature_names = list(pipeline.get("feature_names", pipeline.get("feat_cols", [])))
     thresholds = dict(pipeline.get("thresholds") or checkpoint.get("thresholds") or {})
+    hybrid_meta = pipeline.get("hybrid_meta") or checkpoint.get("hybrid_meta") or thresholds.get("hybrid_meta")
+    if hybrid_meta:
+        thresholds["hybrid_meta"] = hybrid_meta
 
     centroids_np = pipeline.get("centroids_np")
     centroids = torch.FloatTensor(centroids_np) if centroids_np is not None else None
@@ -115,7 +123,6 @@ def run_batch_scores(raw_features: np.ndarray, artifacts: IDSArtifacts, batch_si
 
     probs_all: list[np.ndarray] = []
     ae_all: list[np.ndarray] = []
-    energy_all: list[np.ndarray] = []
     fv_all: list[np.ndarray] = []
 
     with torch.no_grad():
@@ -129,8 +136,6 @@ def run_batch_scores(raw_features: np.ndarray, artifacts: IDSArtifacts, batch_si
             ae_score = _reconstruction_error(artifacts.model, x, probs)
             ae_all.append(np.atleast_1d(ae_score))
 
-            if hasattr(artifacts.model, "energy_score"):
-                energy_all.append(artifacts.model.energy_score(x).cpu().numpy())
             if artifacts.centroids is not None and hasattr(artifacts.model, "fv_cluster_score"):
                 fv_all.append(artifacts.model.fv_cluster_score(x, artifacts.centroids).cpu().numpy())
 
@@ -143,7 +148,7 @@ def run_batch_scores(raw_features: np.ndarray, artifacts: IDSArtifacts, batch_si
         artifacts.class_names[i] if i < len(artifacts.class_names) else "Unknown"
         for i in pred_idx
     ]
-    hybrid_score = 0.5 * ae_all_np + 0.5 * softmax_score
+    hybrid_score = hybrid_score_from_meta(ae_all_np, max_prob, thresholds=artifacts.thresholds)
     is_zeroday, decision_rule = zero_day_decision(
         ae_all_np,
         max_prob,
@@ -166,8 +171,6 @@ def run_batch_scores(raw_features: np.ndarray, artifacts: IDSArtifacts, batch_si
         "is_zeroday": np.asarray(is_zeroday).astype(bool),
         "zero_day_rule": decision_rule,
     })
-    if energy_all:
-        out["energy"] = np.concatenate(energy_all, axis=0)
     if fv_all:
         out["fv_cluster"] = np.concatenate(fv_all, axis=0)
     return out
@@ -185,7 +188,7 @@ def summarize_scores(scores: pd.DataFrame, raw_df: pd.DataFrame | None = None, l
         "verdict_distribution": _value_counts(scores["predicted_class"]),
         "score_distribution": {},
     }
-    for col in ["hybrid", "ae_re", "softmax", "max_prob", "energy", "fv_cluster"]:
+    for col in ["hybrid", "ae_re", "softmax", "max_prob", "fv_cluster"]:
         if col in scores.columns:
             summary["score_distribution"][col] = _distribution(scores[col])
 

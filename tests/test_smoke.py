@@ -327,6 +327,7 @@ class CoreSmokeTests(unittest.TestCase):
         from inference_runtime import (
             assess_normalization_quality,
             ground_truth_verdict,
+            hybrid_score_from_meta,
             risk_score,
             traffic_verdict,
             zero_day_decision,
@@ -350,6 +351,12 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertEqual(ground_truth_verdict("benign"), "Normal")
         self.assertEqual(ground_truth_verdict("Exploit"), "Known-Attack")
         self.assertGreater(risk_score({"hybrid_score": 0.9, "ae_score": 0.8, "is_zeroday": True}, "HIGH"), 80)
+        learned = hybrid_score_from_meta(
+            [0.1, 1.0],
+            [0.95, 0.50],
+            thresholds={"hybrid_meta": {"coef": [3.0, 2.0], "intercept": -2.0}},
+        )
+        self.assertLess(float(learned[0]), float(learned[1]))
 
         quality = assess_normalization_quality(
             {
@@ -776,6 +783,37 @@ class CoreSmokeTests(unittest.TestCase):
         sim = class_prototype_cosine_similarity(model, x.numpy(), y.numpy(), class_a=0, class_b=1)
 
         self.assertLess(sim, 0.5)
+
+    def test_v14_hybrid_meta_learner_separates_validation_zero_day(self):
+        from ids_v14_unswnb15 import compute_hybrid_meta_score, fit_hybrid_meta_learner
+
+        class TinyAE:
+            def recon_error(self, x):
+                return x[:, 0]
+
+        class TinyHybridModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.ae = TinyAE()
+
+            def forward(self, x):
+                return torch.stack([x[:, 1], x[:, 2]], dim=1), x
+
+        known = torch.tensor(
+            [[0.05, 4.0, 0.0], [0.10, 3.5, 0.0], [0.08, 4.5, 0.0]],
+            dtype=torch.float32,
+        ).numpy()
+        zero_day = torch.tensor(
+            [[1.00, 0.0, 0.0], [1.20, 0.2, 0.1], [0.90, 0.1, 0.2]],
+            dtype=torch.float32,
+        ).numpy()
+
+        meta = fit_hybrid_meta_learner(TinyHybridModel(), known, zero_day, "cpu", seed=42)
+        known_scores = compute_hybrid_meta_score([0.05, 0.10], [0.02, 0.03], meta)
+        zd_scores = compute_hybrid_meta_score([1.00, 1.20], [0.50, 0.48], meta)
+
+        self.assertIn("coef", meta)
+        self.assertGreater(float(zd_scores.mean()), float(known_scores.mean()))
 
 
 if __name__ == "__main__":

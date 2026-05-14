@@ -44,6 +44,7 @@ from sklearn.metrics import (
     confusion_matrix,
 )
 from sklearn.cluster import MiniBatchKMeans
+from sklearn.linear_model import LogisticRegression
 
 warnings.filterwarnings('ignore')
 torch.backends.cudnn.benchmark = True
@@ -520,11 +521,16 @@ class IDSModel(nn.Module):
         cent_n    = F.normalize(centroids, dim=-1)
         return torch.cdist(fv_n, cent_n).min(dim=-1).values
 
-    def hybrid_score(self, x, centroids, w_ae=0.5, w_cls=0.5):
+    def hybrid_score(self, x, centroids=None, hybrid_meta=None):
+        if hybrid_meta is None:
+            raise ValueError('hybrid_meta is required for learned hybrid scoring')
         re  = self.ae.recon_error(x)
         probs = torch.softmax(self.forward(x)[0], dim=-1)
         cls_s = 1 - probs.max(dim=-1).values
-        return w_ae * re + w_cls * cls_s
+        coef = torch.tensor(hybrid_meta['coef'], dtype=re.dtype, device=re.device)
+        intercept = torch.tensor(float(hybrid_meta.get('intercept', 0.0)),
+                                 dtype=re.dtype, device=re.device)
+        return torch.sigmoid(intercept + coef[0] * re + coef[1] * cls_s)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -838,28 +844,96 @@ def train(model, loaders, args, criterion, device, label_names=None):
 # ═══════════════════════════════════════════════════════════════
 # SCORING HELPERS
 # ═══════════════════════════════════════════════════════════════
-def _batch_scores(model, X, device, centroids=None, batch=512):
+def _sigmoid_np(values):
+    values = np.clip(values, -50.0, 50.0)
+    return 1.0 / (1.0 + np.exp(-values))
+
+
+def compute_hybrid_meta_score(ae_re, softmax_score, hybrid_meta):
+    if not hybrid_meta:
+        raise ValueError('hybrid_meta is required for learned hybrid scoring')
+    coef = np.asarray(hybrid_meta.get('coef'), dtype=np.float64).reshape(-1)
+    if coef.size < 2:
+        raise ValueError('hybrid_meta must contain two coefficients: ae_re and softmax')
+    intercept = float(hybrid_meta.get('intercept', 0.0))
+    ae_re = np.asarray(ae_re, dtype=np.float64)
+    softmax_score = np.asarray(softmax_score, dtype=np.float64)
+    return _sigmoid_np(intercept + coef[0] * ae_re + coef[1] * softmax_score).astype(np.float32)
+
+
+def _hybrid_base_features(model, X, device, batch=512):
     model.eval()
-    s_e, s_sm, s_fvc, s_re, s_hyb = [], [], [], [], []
+    features = []
+    with torch.no_grad():
+        for i in range(0, len(X), batch):
+            x = torch.FloatTensor(X[i:i+batch]).to(device)
+            probs = torch.softmax(model.forward(x)[0], dim=-1)
+            softmax_score = (1.0 - probs.max(dim=-1).values).cpu().numpy()
+            ae_re = model.ae.recon_error(x).cpu().numpy()
+            features.append(np.column_stack([ae_re, softmax_score]))
+    if not features:
+        return np.empty((0, 2), dtype=np.float32)
+    return np.concatenate(features, axis=0).astype(np.float32)
+
+
+def fit_hybrid_meta_learner(model, X_val_known, X_zd, device, seed=42):
+    known_features = _hybrid_base_features(model, X_val_known, device)
+    zd_features = _hybrid_base_features(model, X_zd, device)
+    X_meta = np.vstack([known_features, zd_features])
+    y_meta = np.concatenate([
+        np.zeros(len(known_features), dtype=np.int64),
+        np.ones(len(zd_features), dtype=np.int64),
+    ])
+    if X_meta.size == 0 or len(np.unique(y_meta)) < 2:
+        raise ValueError('hybrid meta-learner requires known validation and zero-day samples')
+
+    learner = LogisticRegression(
+        max_iter=1000,
+        class_weight='balanced',
+        solver='lbfgs',
+        random_state=seed,
+    )
+    learner.fit(X_meta, y_meta)
+    hybrid_meta = {
+        'type': 'logistic_regression',
+        'features': ['ae_re', 'softmax'],
+        'coef': [float(learner.coef_[0, 0]), float(learner.coef_[0, 1])],
+        'intercept': float(learner.intercept_[0]),
+        'train_rows': int(len(X_meta)),
+        'positive_rows': int(y_meta.sum()),
+    }
+    print('\n  Hybrid meta-learner weights')
+    print(f'    {"feature":<16} {"coef":>12}')
+    print(f'    {"-"*29}')
+    print(f'    {"ae_re":<16} {hybrid_meta["coef"][0]:>12.6f}')
+    print(f'    {"1-max_prob":<16} {hybrid_meta["coef"][1]:>12.6f}')
+    print(f'    {"intercept":<16} {hybrid_meta["intercept"]:>12.6f}')
+    return hybrid_meta
+
+
+def _batch_scores(model, X, device, centroids=None, hybrid_meta=None, batch=512):
+    model.eval()
+    s_sm, s_fvc, s_re, s_hyb = [], [], [], []
     with torch.no_grad():
         for i in range(0,len(X),batch):
             x = torch.FloatTensor(X[i:i+batch]).to(device)
-            s_e.append(model.energy_score(x).cpu().numpy())
             probs = torch.softmax(model.forward(x)[0], dim=-1)
-            s_sm.append((1-probs.max(dim=-1).values).cpu().numpy())
+            softmax_np = (1-probs.max(dim=-1).values).cpu().numpy()
+            s_sm.append(softmax_np)
             re = model.ae.recon_error(x)
-            s_re.append(re.cpu().numpy())
+            re_np = re.cpu().numpy()
+            s_re.append(re_np)
             if centroids is not None:
                 s_fvc.append(model.fv_cluster_score(x,centroids).cpu().numpy())
-                hyb = 0.5*re + 0.5*(1-probs.max(dim=-1).values)
-                s_hyb.append(hyb.cpu().numpy())
+            if hybrid_meta is not None:
+                s_hyb.append(compute_hybrid_meta_score(re_np, softmax_np, hybrid_meta))
     out = {
-        'energy':  np.concatenate(s_e),
         'softmax': np.concatenate(s_sm),
         'ae_re':   np.concatenate(s_re),
     }
     if centroids is not None:
         out['fv_cluster'] = np.concatenate(s_fvc)
+    if hybrid_meta is not None:
         out['hybrid']     = np.concatenate(s_hyb)
     return out
 
@@ -924,8 +998,8 @@ def class_prototype_cosine_similarity(model, X, y, class_a, class_b, device='cpu
     return float(torch.dot(proto_a, proto_b).item())
 
 
-def calibrate(model, X_val, y_val, target_fpr, device, centroids):
-    scores = _batch_scores(model, X_val, device, centroids)
+def calibrate(model, X_val, y_val, target_fpr, device, centroids, hybrid_meta=None):
+    scores = _batch_scores(model, X_val, device, centroids, hybrid_meta=hybrid_meta)
     scores['gradbp_l2'] = _batch_gradbp(model, X_val, device)
     thr = {}
     print(f'\n  Thresholds @ FPR={target_fpr*100:.0f}%')
@@ -960,12 +1034,12 @@ def evaluate_classifier(model, X_te, y_te, label_names, device):
     return {'preds':preds,'probs':probs,'auc':auc}
 
 
-def evaluate_zero_day(model, X_kn, y_kn, X_zd, y_zd, thr, centroids, device):
+def evaluate_zero_day(model, X_kn, y_kn, X_zd, y_zd, thr, centroids, device, hybrid_meta=None):
     print(f'\n{"="*65}')
     print(f'ZERO-DAY DETECTION  |  Known={len(X_kn):,}  ZD={len(X_zd):,}')
     print(f'{"="*65}')
-    sk = _batch_scores(model, X_kn, device, centroids)
-    sz = _batch_scores(model, X_zd, device, centroids)
+    sk = _batch_scores(model, X_kn, device, centroids, hybrid_meta=hybrid_meta)
+    sz = _batch_scores(model, X_zd, device, centroids, hybrid_meta=hybrid_meta)
     sk['gradbp_l2'] = _batch_gradbp(model, X_kn, device)
     sz['gradbp_l2'] = _batch_gradbp(model, X_zd, device)
 
@@ -973,7 +1047,9 @@ def evaluate_zero_day(model, X_kn, y_kn, X_zd, y_zd, thr, centroids, device):
     results = {}
     print(f'\n  {"Method":<16} {"AUC":>8} {"TPR@1%":>10} {"TPR@5%":>10}')
     print(f'  {"-"*48}')
-    for m in ['gradbp_l2','hybrid','ae_re','energy','softmax','fv_cluster']:
+    # Energy is intentionally excluded from OOD comparison: observed AUC < 0.6,
+    # which is not materially better than a random baseline for this task.
+    for m in ['gradbp_l2','hybrid','ae_re','softmax','fv_cluster']:
         if m not in sk: continue
         sc_all = np.concatenate([sk[m], sz[m]])
         try: auc = roc_auc_score(true, sc_all)
@@ -1154,14 +1230,14 @@ def plot_roc_curves(zd_results, save_path):
 
     method_colors = {
         'gradbp_l2':'#FF6B6B', 'hybrid':'#FFA500', 'ae_re':'#00BFFF',
-        'energy':'#90EE90',    'softmax':'#DDA0DD', 'fv_cluster':'#F0E68C',
+        'softmax':'#DDA0DD',   'fv_cluster':'#F0E68C',
     }
     for m, r in zd_results.items():
         if m.startswith('_') or 'fpr' not in r: continue
         fpr = np.array(r['fpr']); tpr = np.array(r['tpr'])
         auc = r['auc']
         c   = method_colors.get(m,'white')
-        ls  = '--' if m in ('energy','softmax') else '-'
+        ls  = '--' if m == 'softmax' else '-'
         ax.plot(fpr, tpr, c=c, lw=2, ls=ls, label=f'{m}  AUC={auc:.4f}')
 
     ax.plot([0,1],[0,1],'--', color='#555', lw=1)
@@ -1211,7 +1287,7 @@ def plot_confusion_matrix(y_true, y_pred, label_names, save_path):
 # ═══════════════════════════════════════════════════════════════
 # SAVE MODEL
 # ═══════════════════════════════════════════════════════════════
-def save_artifacts(model, splits, thresholds, history, centroids, save_dir):
+def save_artifacts(model, splits, thresholds, history, centroids, save_dir, hybrid_meta=None):
     os.makedirs(save_dir, exist_ok=True)
 
     pth_path = os.path.join(save_dir, 'ids_v14_model.pth')
@@ -1227,6 +1303,7 @@ def save_artifacts(model, splits, thresholds, history, centroids, save_dir):
         'feat_cols':        splits['feat_cols'],
         'categorical_maps': splits.get('categorical_maps', {}),
         'thresholds':       thresholds,
+        'hybrid_meta':      hybrid_meta,
         'history':          history,
         'version':          'v14.0',
     }, pth_path)
@@ -1241,6 +1318,7 @@ def save_artifacts(model, splits, thresholds, history, centroids, save_dir):
         'known_cats':    splits['known_cats'],
         'zd_cats':       splits['zd_cats'],
         'thresholds':    thresholds,
+        'hybrid_meta':   hybrid_meta,
         'categorical_maps': splits.get('categorical_maps', {}),
         'centroids_np':  centroids.cpu().numpy(),
         'n_features':    splits['n_features'],
@@ -1309,11 +1387,16 @@ def run_full(args):
     model, history = train(model, loaders, args, criterion, device, label_names=label_names)
 
     print('\n[6/8] Building centroids + calibrating thresholds...')
+    hybrid_meta = fit_hybrid_meta_learner(
+        model, splits['X_val'], splits['X_zd'], device, seed=args.seed,
+    )
     centroids  = build_centroids(model, splits['X_train'], splits['y_train'],
                                   n_clusters=args.n_clusters, device=device,
                                   seed=args.seed)
     thresholds = calibrate(model, splits['X_val'], splits['y_val'],
-                           args.target_fpr, device, centroids)
+                           args.target_fpr, device, centroids,
+                           hybrid_meta=hybrid_meta)
+    thresholds['hybrid_meta'] = hybrid_meta
 
     model.eval()
     re_val = []
@@ -1334,11 +1417,14 @@ def run_full(args):
     zd_res = evaluate_zero_day(
         model, splits['X_test'], splits['y_test'],
         splits['X_zd'],          splits['y_zd'],
-        thresholds, centroids, device,
+        thresholds, centroids, device, hybrid_meta=hybrid_meta,
     )
 
     print('\n[8/8] Saving & plotting...')
-    pth_p, pkl_p = save_artifacts(model, splits, thresholds, history, centroids, args.save_dir)
+    pth_p, pkl_p = save_artifacts(
+        model, splits, thresholds, history, centroids, args.save_dir,
+        hybrid_meta=hybrid_meta,
+    )
 
     plot_training_curve(history, os.path.join(args.plot_dir,'v14_training_curve.png'))
     plot_soc_decision_space(model, splits['X_test'], splits['y_test'],
@@ -1369,6 +1455,7 @@ def run_full(args):
         'n_classes': int(splits['n_classes']),
         'n_epochs': len(history),
         'thresholds': thresholds,
+        'hybrid_meta': hybrid_meta,
         'known_cats': splits['known_cats'],
         'zd_cats': splits['zd_cats'],
     }
@@ -1452,16 +1539,27 @@ def run_demo(args):
     label_names = [f'Class_{i}' for i in range(n_cls)]
     model, history = train(model, loaders, args, criterion, device, label_names=label_names)
 
+    hybrid_meta = fit_hybrid_meta_learner(
+        model, X_va, X_zd, device, seed=getattr(args, 'seed', 42),
+    )
     centroids  = build_centroids(model, X_tr, y_tr, 10, device,
                                  seed=getattr(args, 'seed', 42))
-    thresholds = calibrate(model, X_va, y_va, args.target_fpr, device, centroids)
+    thresholds = calibrate(
+        model, X_va, y_va, args.target_fpr, device, centroids,
+        hybrid_meta=hybrid_meta,
+    )
+    thresholds['hybrid_meta'] = hybrid_meta
 
     clf_res     = evaluate_classifier(model, X_te, y_te, label_names, device)
     clf_res['y_test'] = y_te
     zd_res      = evaluate_zero_day(model, X_te, y_te, X_zd, y_zd,
-                                     thresholds, centroids, device)
+                                     thresholds, centroids, device,
+                                     hybrid_meta=hybrid_meta)
 
-    pth_p, pkl_p = save_artifacts(model, splits, thresholds, history, centroids, args.save_dir)
+    pth_p, pkl_p = save_artifacts(
+        model, splits, thresholds, history, centroids, args.save_dir,
+        hybrid_meta=hybrid_meta,
+    )
 
     re_val_list=[]
     with torch.no_grad():

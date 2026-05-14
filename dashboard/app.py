@@ -370,6 +370,7 @@ except ImportError:
 from inference_runtime import (
     assess_normalization_quality as runtime_assess_normalization_quality,
     ground_truth_verdict as runtime_ground_truth_verdict,
+    hybrid_score_from_meta as runtime_hybrid_score_from_meta,
     risk_score as runtime_risk_score,
     run_batch_inference as runtime_run_batch_inference,
     severity_class as runtime_severity_class,
@@ -591,6 +592,10 @@ def load_model():
             validation.raise_for_errors()
 
         PIPELINE_THRESHOLDS = dict(pipeline.get('thresholds') or {})
+        hybrid_meta = pipeline.get('hybrid_meta') or checkpoint.get('hybrid_meta') or PIPELINE_THRESHOLDS.get('hybrid_meta')
+        if hybrid_meta:
+            PIPELINE_THRESHOLDS['hybrid_meta'] = hybrid_meta
+            pipeline['hybrid_meta'] = hybrid_meta
         PIPELINE_META = pipeline
         threshold_profile = _load_threshold_profile(THRESHOLD_PROFILE_PATH)
         if threshold_profile is not None:
@@ -647,6 +652,9 @@ def _zero_day_decision(ae_score, max_prob, hybrid_score):
         ae_threshold=AE_THRESHOLD,
         hybrid_threshold=HYBRID_THRESHOLD,
     )
+
+def _hybrid_score(ae_score, max_prob):
+    return runtime_hybrid_score_from_meta(ae_score, max_prob, thresholds=PIPELINE_THRESHOLDS)
 
 def _traffic_verdict(is_zeroday, classifier_class) -> str:
     return runtime_traffic_verdict(is_zeroday, classifier_class)
@@ -718,7 +726,7 @@ def mock_inference(n_features=49):
     max_prob     = float(np.random.uniform(0.4, 0.99))
     pred_idx     = int(np.random.randint(0, len(CLASS_NAMES)))
     classifier_class = CLASS_NAMES[pred_idx]
-    hybrid_score = 0.5 * ae_score + 0.5 * (1 - max_prob)
+    hybrid_score = float(np.asarray(_hybrid_score(ae_score, max_prob)).reshape(-1)[0])
     is_zeroday   = ae_score > AE_THRESHOLD and max_prob < 0.6
     verdict       = _traffic_verdict(is_zeroday, classifier_class)
 
@@ -779,7 +787,7 @@ def run_full_pipeline(raw_features: np.ndarray, comps: dict):
         else:
             ae_score = float(1.0 - max_prob + np.random.uniform(0, 0.1))
 
-    hybrid_score = 0.5 * ae_score + 0.5 * (1 - max_prob)
+    hybrid_score = float(np.asarray(_hybrid_score(ae_score, max_prob)).reshape(-1)[0])
     is_zeroday, decision_rule = _zero_day_decision(ae_score, max_prob, hybrid_score)
     is_zeroday = bool(is_zeroday)
     verdict = _traffic_verdict(is_zeroday, pred_class)
@@ -1226,7 +1234,7 @@ elif page == "[2] Analyze Alert":
         atk_cls = st.selectbox("Predicted Class", CLASS_NAMES)
 
         if st.button("Phan tich", type="primary"):
-            hybrid = 0.5 * ae_val + 0.5 * (1 - max_p)
+            hybrid = float(np.asarray(_hybrid_score(ae_val, max_p)).reshape(-1)[0])
             is_zd, decision_rule = _zero_day_decision(ae_val, max_p, hybrid)
             is_zd = bool(is_zd)
             verdict = _traffic_verdict(is_zd, atk_cls)

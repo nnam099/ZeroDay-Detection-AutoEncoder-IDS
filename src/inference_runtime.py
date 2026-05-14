@@ -5,6 +5,28 @@ import pandas as pd
 import torch
 
 
+def _sigmoid(values):
+    values = np.clip(values, -50.0, 50.0)
+    return 1.0 / (1.0 + np.exp(-values))
+
+
+def hybrid_score_from_meta(ae_score, max_prob, thresholds: dict | None = None, hybrid_meta: dict | None = None):
+    meta = hybrid_meta or (thresholds or {}).get("hybrid_meta")
+    ae_score = np.asarray(ae_score, dtype=np.float32)
+    softmax_score = 1.0 - np.asarray(max_prob, dtype=np.float32)
+    if isinstance(meta, dict):
+        coef = np.asarray(meta.get("coef", []), dtype=np.float64).reshape(-1)
+        if coef.size >= 2:
+            intercept = float(meta.get("intercept", 0.0))
+            return np.asarray(
+                _sigmoid(intercept + coef[0] * ae_score + coef[1] * softmax_score),
+                dtype=np.float32,
+            )
+
+    # Legacy artifacts produced before the meta-learner still need a deterministic score.
+    return np.asarray(0.5 * ae_score + 0.5 * softmax_score, dtype=np.float32)
+
+
 def zero_day_decision(
     ae_score,
     max_prob,
@@ -93,7 +115,7 @@ def run_batch_inference(
     max_prob = probs_all.max(axis=1)
     pred_idx = probs_all.argmax(axis=1)
     pred_class = [class_names[i] if i < len(class_names) else "Unknown" for i in pred_idx]
-    hybrid_score = 0.5 * ae_all + 0.5 * (1 - max_prob)
+    hybrid_score = hybrid_score_from_meta(ae_all, max_prob, thresholds=thresholds)
     is_zeroday, decision_rule = zero_day_decision(
         ae_all,
         max_prob,
