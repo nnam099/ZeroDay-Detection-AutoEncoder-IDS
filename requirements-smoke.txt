@@ -6,3 +6,5 @@ scikit-learn>=1.2
 matplotlib>=3.7
 pyyaml>=6.0
 python-dotenv>=1.0
+fastapi>=0.110
+httpx>=0.26

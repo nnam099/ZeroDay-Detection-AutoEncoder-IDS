@@ -13,6 +13,6 @@ RUN python -m pip install --upgrade pip \
 
 COPY . .
 
-EXPOSE 8501
+EXPOSE 8080
 
-CMD ["streamlit", "run", "dashboard/app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+CMD ["uvicorn", "src.serve:app", "--host", "0.0.0.0", "--port", "8080"]

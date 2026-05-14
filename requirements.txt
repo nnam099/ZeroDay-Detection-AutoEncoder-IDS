@@ -5,6 +5,9 @@ pandas>=1.5
 scikit-learn>=1.2
 matplotlib>=3.7
 pyyaml>=6.0
+fastapi>=0.110
+uvicorn[standard]>=0.27
+httpx>=0.26
 
 # Optional - dashboard and explainability
 streamlit>=1.30
