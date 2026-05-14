@@ -14,6 +14,7 @@ CẢI TIẾN SO VỚI v13:
 """
 
 import os, sys, glob, json, copy, time, pickle, warnings, random
+from collections import deque
 # Fix UnicodeEncodeError khi print duong dan tieng Viet tren Windows terminal
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
     try: sys.stdout.reconfigure(encoding='utf-8')
@@ -74,6 +75,7 @@ class CFG:
 
     # Zero-day
     target_fpr        = 0.05
+    adaptive_threshold = False
     n_clusters        = 25
     zd_augment_factor = 1
 
@@ -844,6 +846,28 @@ def train(model, loaders, args, criterion, device, label_names=None):
 # ═══════════════════════════════════════════════════════════════
 # SCORING HELPERS
 # ═══════════════════════════════════════════════════════════════
+class AdaptiveThreshold:
+    def __init__(self, window_size=1000, target_fpr=0.05):
+        self.window_size = int(window_size)
+        self.target_fpr = float(target_fpr)
+        self.buffer = deque(maxlen=self.window_size)
+        self.threshold = float('inf')
+
+    def update(self, re_scores: np.ndarray):
+        scores = np.asarray(re_scores, dtype=np.float64).reshape(-1)
+        scores = scores[np.isfinite(scores)]
+        self.buffer.extend(float(score) for score in scores)
+        if self.buffer:
+            self.threshold = float(np.quantile(
+                np.asarray(self.buffer, dtype=np.float64),
+                1.0 - self.target_fpr,
+            ))
+        return self.threshold
+
+    def __call__(self, re_score: float) -> bool:
+        return bool(float(re_score) > self.threshold)
+
+
 def _sigmoid_np(values):
     values = np.clip(values, -50.0, 50.0)
     return 1.0 / (1.0 + np.exp(-values))
@@ -1013,6 +1037,26 @@ def calibrate(model, X_val, y_val, target_fpr, device, centroids, hybrid_meta=No
 # ═══════════════════════════════════════════════════════════════
 # EVALUATION
 # ═══════════════════════════════════════════════════════════════
+def compute_adaptive_threshold_trace(model, X_test, y_test, normal_idx,
+                                     seed_re_scores, target_fpr, device,
+                                     window_size=1000):
+    ae_scores = _batch_scores(model, X_test, device)['ae_re']
+    tracker = AdaptiveThreshold(window_size=window_size, target_fpr=target_fpr)
+    tracker.update(seed_re_scores)
+    thresholds, decisions = [], []
+    for re_score, label in zip(ae_scores, y_test):
+        decisions.append(tracker(float(re_score)))
+        if int(label) == int(normal_idx):
+            tracker.update(np.asarray([re_score], dtype=np.float32))
+        thresholds.append(tracker.threshold)
+    return {
+        'ae_scores': ae_scores,
+        'thresholds': np.asarray(thresholds, dtype=np.float32),
+        'decisions': np.asarray(decisions, dtype=bool),
+        'final_threshold': float(tracker.threshold),
+    }
+
+
 def evaluate_classifier(model, X_te, y_te, label_names, device):
     model.eval()
     preds, probs_list = [], []
@@ -1223,6 +1267,26 @@ def plot_training_curve(history, save_path):
     print(f'  [Plot] Training curve -> {save_path}')
 
 
+def plot_threshold_drift(threshold_trace, save_path):
+    thresholds = np.asarray(threshold_trace.get('thresholds', []), dtype=np.float32)
+    if thresholds.size == 0:
+        return
+    fig, ax = plt.subplots(figsize=(12, 4))
+    fig.patch.set_facecolor('#0d1117')
+    ax.set_facecolor('#0d1117')
+    ax.plot(np.arange(len(thresholds)), thresholds, color='#FFA500', lw=1.8)
+    ax.set_xlabel('Test timeline index', color='white', fontsize=11)
+    ax.set_ylabel('AE threshold', color='white', fontsize=11)
+    ax.set_title('V14.0 - Adaptive AE Threshold Drift', color='white', fontsize=13, fontweight='bold')
+    ax.tick_params(colors='white')
+    ax.grid(color='#26313b', linestyle='--', linewidth=0.6, alpha=0.7)
+    for sp in ax.spines.values(): sp.set_edgecolor('#333')
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='#0d1117')
+    plt.close()
+    print(f'  [Plot] Threshold drift -> {save_path}')
+
+
 def plot_roc_curves(zd_results, save_path):
     fig, ax = plt.subplots(figsize=(8, 7))
     fig.patch.set_facecolor('#0d1117')
@@ -1398,6 +1462,7 @@ def run_full(args):
                            hybrid_meta=hybrid_meta)
     thresholds['hybrid_meta'] = hybrid_meta
 
+    normal_idx  = label_names.index('Normal') if 'Normal' in label_names else 0
     model.eval()
     re_val = []
     with torch.no_grad():
@@ -1406,10 +1471,20 @@ def run_full(args):
             re_val.append(model.ae.recon_error(x).cpu().numpy())
     re_val = np.concatenate(re_val)
     re_thr = float(np.quantile(re_val, 1-args.target_fpr))
+    threshold_trace = None
+    final_ae_threshold = float(thresholds.get('ae_re', re_thr))
+    if getattr(args, 'adaptive_threshold', False):
+        threshold_trace = compute_adaptive_threshold_trace(
+            model, splits['X_test'], splits['y_test'], normal_idx,
+            re_val, args.target_fpr, device,
+        )
+        final_ae_threshold = float(threshold_trace['final_threshold'])
+        thresholds['ae_re'] = final_ae_threshold
+        re_thr = final_ae_threshold
+        print(f'\n  Adaptive AE threshold final={final_ae_threshold:.6f}')
     p_thr  = 0.5
 
     print('\n[7/8] Evaluating...')
-    normal_idx  = label_names.index('Normal') if 'Normal' in label_names else 0
     clf_res     = evaluate_classifier(model, splits['X_test'], splits['y_test'],
                                        label_names, device)
     clf_res['y_test'] = splits['y_test']
@@ -1440,6 +1515,11 @@ def run_full(args):
     plot_roc_curves(zd_res, os.path.join(args.plot_dir,'v14_roc_curves.png'))
     plot_confusion_matrix(splits['y_test'], clf_res['preds'], label_names,
                           os.path.join(args.plot_dir,'v14_confusion_matrix.png'))
+    if threshold_trace is not None:
+        plot_threshold_drift(
+            threshold_trace,
+            os.path.join(args.plot_dir, 'v14_threshold_drift.png'),
+        )
 
     best_zd_auc = max((v['auc'] for k,v in zd_res.items()
                        if not k.startswith('_') and 'auc' in v), default=0.)
@@ -1456,6 +1536,7 @@ def run_full(args):
         'n_epochs': len(history),
         'thresholds': thresholds,
         'hybrid_meta': hybrid_meta,
+        'final_ae_threshold': final_ae_threshold,
         'known_cats': splits['known_cats'],
         'zd_cats': splits['zd_cats'],
     }
@@ -1549,6 +1630,16 @@ def run_demo(args):
         hybrid_meta=hybrid_meta,
     )
     thresholds['hybrid_meta'] = hybrid_meta
+    re_val_demo = _batch_scores(model, X_va, device)['ae_re']
+    re_thr_demo = float(np.quantile(re_val_demo, 1 - args.target_fpr))
+    threshold_trace = None
+    if getattr(args, 'adaptive_threshold', False):
+        threshold_trace = compute_adaptive_threshold_trace(
+            model, X_te, y_te, 0, re_val_demo, args.target_fpr, device,
+        )
+        thresholds['ae_re'] = float(threshold_trace['final_threshold'])
+        re_thr_demo = float(threshold_trace['final_threshold'])
+        print(f'\n  Adaptive AE threshold final={re_thr_demo:.6f}')
 
     clf_res     = evaluate_classifier(model, X_te, y_te, label_names, device)
     clf_res['y_test'] = y_te
@@ -1561,13 +1652,6 @@ def run_demo(args):
         hybrid_meta=hybrid_meta,
     )
 
-    re_val_list=[]
-    with torch.no_grad():
-        for i in range(0,len(X_va),512):
-            x=torch.FloatTensor(X_va[i:i+512]).to(device)
-            re_val_list.append(model.ae.recon_error(x).cpu().numpy())
-    re_thr_demo = float(np.quantile(np.concatenate(re_val_list), 0.95))
-
     plot_training_curve(history, os.path.join(args.plot_dir,'v14_training_curve.png'))
     plot_soc_decision_space(model,X_te,y_te,X_zd,0.5,re_thr_demo,device,
                              os.path.join(args.plot_dir,'v14_decision_space.png'),label_names,
@@ -1579,6 +1663,11 @@ def run_demo(args):
     plot_roc_curves(zd_res, os.path.join(args.plot_dir,'v14_roc_curves.png'))
     plot_confusion_matrix(y_te, clf_res['preds'], label_names,
                           os.path.join(args.plot_dir,'v14_confusion_matrix.png'))
+    if threshold_trace is not None:
+        plot_threshold_drift(
+            threshold_trace,
+            os.path.join(args.plot_dir, 'v14_threshold_drift.png'),
+        )
 
     print(f'\nDemo done!  Plots -> {args.plot_dir}')
     print(f'   .pth -> {pth_p}')

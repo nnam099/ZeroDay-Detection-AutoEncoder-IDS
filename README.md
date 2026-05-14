@@ -21,7 +21,7 @@ Main flow:
 ## Current Status
 
 - v14 is the operational default because local artifacts exist in `checkpoints/`.
-- `scripts/smoke_check.py` passes locally with 32 tests.
+- `scripts/smoke_check.py` passes locally with 33 tests.
 - Smoke coverage includes artifact contract validation, threshold metadata validation, artifact manifest hashing, duplicate feature-name rejection, environment readiness checks, export config handling, checkpoint metadata patch logic, SQLite alert store persistence, CSV input guardrails, CSV normalization quality checks, dashboard preprocessing/context contracts, AI context selection, alert queue filtering, top-N batch alert selection, alert entity enrichment, lightweight correlation, Recon/DoS prototype separation, LLM fallback behavior, MITRE mapping and v14 artifact loading.
 - `llm_agent.py` lazy-loads provider clients, so importing dashboard code does not require an API key.
 - A Windows GitHub Actions smoke workflow is available at `.github/workflows/smoke.yml`.
@@ -31,7 +31,7 @@ Main flow:
 ## Features
 
 - Known-attack classification for classes such as `Normal`, `DoS`, `Exploits`, `Reconnaissance` and `Generic`.
-- Zero-day/OOD detection using reconstruction error, classifier confidence and a learned logistic-regression hybrid score.
+- Zero-day/OOD detection using reconstruction error, optional adaptive AE thresholding, classifier confidence and a learned logistic-regression hybrid score.
 - Streamlit SOC dashboard for single alert review, CSV batch analysis, alert history and AI follow-up.
 - SQLite alert store for persisted queue history, status, analyst notes, queue filtering, top-N batch alert persistence and lightweight correlation groups.
 - Real-world CSV normalization for common firewall/flow/Zeek/Suricata-like exports.

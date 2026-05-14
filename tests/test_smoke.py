@@ -784,6 +784,20 @@ class CoreSmokeTests(unittest.TestCase):
 
         self.assertLess(sim, 0.5)
 
+    def test_v14_adaptive_threshold_uses_recent_window(self):
+        import numpy as np
+        from ids_v14_unswnb15 import AdaptiveThreshold
+
+        tracker = AdaptiveThreshold(window_size=3, target_fpr=1 / 3)
+        first = tracker.update(np.asarray([1.0, 2.0, 3.0], dtype=np.float32))
+        self.assertAlmostEqual(first, float(np.quantile([1.0, 2.0, 3.0], 2 / 3)))
+        self.assertTrue(tracker(3.5))
+        self.assertFalse(tracker(1.5))
+
+        second = tracker.update(np.asarray([9.0], dtype=np.float32))
+        self.assertAlmostEqual(second, float(np.quantile([2.0, 3.0, 9.0], 2 / 3)))
+        self.assertEqual(list(tracker.buffer), [2.0, 3.0, 9.0])
+
     def test_v14_hybrid_meta_learner_separates_validation_zero_day(self):
         from ids_v14_unswnb15 import compute_hybrid_meta_score, fit_hybrid_meta_learner
 
