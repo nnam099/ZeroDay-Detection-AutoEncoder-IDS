@@ -1,12 +1,12 @@
 # Zero-Day Detection AutoEncoder IDS
 
-Prototype IDS for UNSW-NB15 research and SOC-style demonstrations. The project combines known-attack classification, reconstruction-error based zero-day/OOD detection, Streamlit dashboard analysis, SHAP explainability, heuristic MITRE ATT&CK mapping and optional LLM triage.
+Prototype IDS for UNSW-NB15 research and SOC-style demonstrations. The project combines known-attack classification, reconstruction-error based zero-day/OOD detection, Streamlit dashboard analysis, FastAPI inference serving, SHAP explainability, heuristic MITRE ATT&CK mapping and optional LLM triage.
 
 > This is a research/demo project, not a production IDS. Analyst review and supporting SIEM/firewall/endpoint evidence are still required.
 
 ## Overview
 
-The training pipeline learns from selected known attack classes and holds out other classes to simulate zero-day or out-of-distribution traffic. The dashboard loads saved artifacts and supports both single-alert analysis and CSV batch uploads.
+The training pipeline learns from selected known attack classes and holds out other classes to simulate zero-day or out-of-distribution traffic. The dashboard and FastAPI server load saved artifacts and support single-alert analysis, CSV batch uploads and real-time JSON prediction.
 
 Main flow:
 
@@ -15,17 +15,18 @@ Main flow:
 3. Train a hybrid supervised classifier + contrastive representation + autoencoder model.
 4. Calibrate anomaly/zero-day thresholds.
 5. Save checkpoint and preprocessing pipeline artifacts.
-6. Analyze alerts in the Streamlit dashboard.
-7. Attach SHAP, MITRE and optional LLM context for SOC triage.
+6. Analyze alerts in the Streamlit dashboard or call the FastAPI `/predict` endpoint.
+7. Attach SHAP, MITRE, uncertainty and optional LLM context for SOC triage.
 
 ## Current Status
 
 - v14 is the operational default because local artifacts exist in `checkpoints/`.
-- `scripts/smoke_check.py` passes locally with 36 tests.
+- Runtime dependencies are pinned in `requirements.txt`; test-only dependencies are in `requirements-dev.txt`.
+- `scripts/smoke_check.py` passes locally with 39 tests.
 - Smoke coverage includes artifact contract validation, threshold metadata validation, artifact manifest hashing, duplicate feature-name rejection, environment readiness checks, export config handling, checkpoint metadata patch logic, SQLite alert store persistence, CSV input guardrails, CSV normalization quality checks, dashboard preprocessing/context contracts, AI context selection, alert queue filtering, top-N batch alert selection, alert entity enrichment, lightweight correlation, Recon/DoS prototype separation, LLM fallback behavior, MITRE mapping and v14 artifact loading.
 - `llm_agent.py` lazy-loads provider clients, so importing dashboard code does not require an API key.
 - A Windows GitHub Actions smoke workflow is available at `.github/workflows/smoke.yml`.
-- A basic Dockerfile is available for dashboard deployment experiments.
+- A Dockerfile is available for FastAPI inference on port `8080`.
 - v14 performance metrics have not been regenerated after the latest operational fixes; `results/ids_v14_results.json` records artifact smoke verification only.
 
 ## Features
@@ -33,6 +34,8 @@ Main flow:
 - Known-attack classification for classes such as `Normal`, `DoS`, `Exploits`, `Reconnaissance` and `Generic`.
 - Zero-day/OOD detection using reconstruction error, optional adaptive AE thresholding, classifier confidence and a learned logistic-regression hybrid score.
 - Streamlit SOC dashboard for single alert review, CSV batch analysis, alert history and AI follow-up.
+- FastAPI inference server for real-time JSON predictions from saved v14 artifacts.
+- Monte Carlo Dropout uncertainty for served predictions, with `LOW_CONFIDENCE` labeling when entropy is high.
 - SQLite alert store for persisted queue history, status, analyst notes, queue filtering, top-N batch alert persistence and lightweight correlation groups.
 - Real-world CSV normalization for common firewall/flow/Zeek/Suricata-like exports.
 - CSV upload guardrails for empty, oversized or malformed files.
@@ -49,6 +52,7 @@ src/
   ids_v14_unswnb15.py      # compatibility wrapper for older imports/commands
   ids_v15_unswnb15.py      # experimental v15 pipeline
   inference_runtime.py     # pure verdict/zero-day/risk/CSV-quality helpers used by dashboard
+  serve.py                 # FastAPI v14 inference server
   dashboard_runtime.py     # Streamlit-free dashboard preprocessing, AI context and fallback helpers
   alert_store.py           # SQLite alert history, status and analyst note persistence
   batch_evaluator.py       # CLI-friendly batch inference, CSV reporting and threshold calibration
@@ -110,6 +114,12 @@ Minimal dependencies for smoke checks only:
 python -m pip install --progress-bar off -r requirements-smoke.txt
 ```
 
+Developer test dependencies:
+
+```powershell
+python -m pip install --progress-bar off -r requirements-dev.txt
+```
+
 The UTF-8 environment variables avoid console encoding failures when the project path contains Vietnamese characters.
 
 Optional LLM setup:
@@ -163,6 +173,60 @@ Important environment variables:
 | `LLM_PROVIDER` | `none`, `groq`, `gemini`, `openai` or `anthropic` |
 
 If model or pipeline artifacts are missing, the dashboard falls back to demo mode. Alert history is persisted locally in SQLite; database files are ignored by git.
+
+## Run Inference API
+
+The FastAPI server is inference-only. It loads the saved v14 checkpoint and preprocessing pipeline at startup from environment variables:
+
+```powershell
+$env:IDS_MODEL_PATH="checkpoints/ids_v14_model.pth"
+$env:IDS_PIPELINE_PATH="checkpoints/ids_v14_pipeline.pkl"
+uvicorn src.serve:app --host 0.0.0.0 --port 8080
+```
+
+Health check:
+
+```bash
+curl http://localhost:8080/health
+```
+
+Prediction request. Replace `61` with the feature count in your checkpoint if you retrain with a different feature set:
+
+```powershell
+$body = @{ features = @(0..60 | ForEach-Object { 0.0 }) } | ConvertTo-Json -Compress
+Invoke-RestMethod -Uri "http://localhost:8080/predict" -Method Post -ContentType "application/json" -Body $body
+```
+
+The `features` array must match the checkpoint feature count. The server applies the saved `RobustScaler` from `ids_v14_pipeline.pkl`, then returns:
+
+```json
+{
+  "label": "Normal",
+  "confidence": 0.99,
+  "ae_re": 0.01,
+  "hybrid_score": 0.02,
+  "is_anomaly": false,
+  "uncertainty": {
+    "entropy": 0.1,
+    "std_max_class": 0.01
+  }
+}
+```
+
+Uncertainty is estimated with Monte Carlo Dropout over 30 stochastic forward passes. If `uncertainty.entropy > 1.5`, the API response uses `"label": "LOW_CONFIDENCE"` so clients can route the alert for analyst review.
+
+Docker:
+
+```bash
+docker build -t ids-v14-serve .
+docker run --rm -p 8080:8080 \
+  -v "$(pwd)/checkpoints:/app/checkpoints:ro" \
+  -e IDS_MODEL_PATH=/app/checkpoints/ids_v14_model.pth \
+  -e IDS_PIPELINE_PATH=/app/checkpoints/ids_v14_pipeline.pkl \
+  ids-v14-serve
+```
+
+Local checkpoint files are ignored by git and excluded by `.dockerignore`, so mount artifacts into the container or copy them into a deployment-specific image.
 
 ## Train
 
