@@ -187,6 +187,31 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertEqual(readiness["status"], "BLOCKED")
         self.assertTrue(any("torch" in item for item in readiness["blockers"]))
 
+    def test_environment_check_configures_utf8_console_output(self):
+        from scripts.check_environment import configure_console_encoding
+
+        class FakeStream:
+            def __init__(self):
+                self.calls = []
+
+            def reconfigure(self, **kwargs):
+                self.calls.append(kwargs)
+
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        fake_stdout = FakeStream()
+        fake_stderr = FakeStream()
+        try:
+            sys.stdout = fake_stdout
+            sys.stderr = fake_stderr
+            configure_console_encoding()
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+
+        self.assertEqual(fake_stdout.calls, [{"encoding": "utf-8", "errors": "backslashreplace"}])
+        self.assertEqual(fake_stderr.calls, [{"encoding": "utf-8", "errors": "backslashreplace"}])
+
     def test_artifact_manifest_detects_hash_changes(self):
         from scripts.artifact_manifest import build_manifest, verify_manifest
 

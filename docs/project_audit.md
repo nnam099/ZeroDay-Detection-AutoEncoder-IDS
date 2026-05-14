@@ -1,12 +1,13 @@
 # Project Audit
 
-Updated: 2026-05-13
+Updated: 2026-05-14
 
 ## Verified
 
 - `scripts/smoke_check.py` now runs with UTF-8 subprocess settings, so it works on Windows paths containing Vietnamese characters.
+- `scripts/check_environment.py` now configures UTF-8 console output before printing JSON, so direct execution works from Windows paths containing Vietnamese characters.
 - Python compile passes for `src/`, `dashboard/`, `export_model.py`, `patch_checkpoint.py` and `tests/`.
-- Smoke tests pass locally: 19 tests.
+- Smoke tests pass locally: 20 tests.
 - Checkpoint `ids_v14_model.pth` loads into `IDSModel` v14 without missing or unexpected weights.
 - Pipeline v14 has 61 features and matches `n_features` in the checkpoint.
 - `log_normalizer.py` maps common firewall/flow CSV columns into an UNSW-like flow schema.
@@ -19,7 +20,7 @@ Updated: 2026-05-13
 - `export_model.py` now exposes a CLI instead of hard-coding `data/quick_train`.
 - PowerShell train launchers are available for v14 and v15.
 - CI uses `requirements-smoke.txt` so optional dashboard/explainability packages do not slow down core smoke checks.
-- `scripts/check_environment.py` reports package/artifact/data readiness without exposing secret values.
+- `scripts/check_environment.py` reports package/artifact/data readiness without exposing secret values and is covered for UTF-8 console output.
 - `input_guard.py` validates uploaded CSV size/shape before dashboard batch inference.
 - `.env.example` documents optional provider/runtime environment variables without storing secrets.
 - `scripts/artifact_manifest.py` can create/verify SHA-256 manifests for local model artifacts.
@@ -36,7 +37,7 @@ Updated: 2026-05-13
 ## Current Risks
 
 - `dashboard/app.py` is still a large file. Some verdict/risk and batch inference helpers have been split out, but preprocessing, UI and LLM workflow should be split further for unit testing.
-- Some code comments/docstrings still contain mojibake from earlier encoding issues.
+- Some code comments/docstrings still contain mojibake or ASCII-only Vietnamese text from earlier encoding issues.
 - v14 artifact compatibility is verified, but full model performance metrics have not been regenerated after the latest operational fixes.
 - v15 is experimental. The dashboard can select it, but stable v15 use requires separately trained/exported artifacts.
 - LLM provider packages remain optional and are not installed unless the selected provider is needed.

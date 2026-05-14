@@ -15,6 +15,13 @@ if str(SCRIPT_DIR) not in sys.path:
 from artifact_manifest import verify_manifest  # noqa: E402
 
 
+def configure_console_encoding() -> None:
+    """Keep JSON output printable from Windows consoles with non-UTF-8 codepages."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+
+
 def module_available(name: str) -> bool:
     try:
         return importlib.util.find_spec(name) is not None
@@ -117,6 +124,7 @@ def assess_readiness(env: dict) -> dict:
 
 
 def main() -> int:
+    configure_console_encoding()
     print(json.dumps(collect_environment(), indent=2, ensure_ascii=False))
     return 0
 
