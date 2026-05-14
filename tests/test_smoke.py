@@ -750,6 +750,69 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertEqual(features.shape[0], 2)
         self.assertEqual(tuple(ae_score.shape), (2,))
 
+    def test_ids_model_forward_shapes(self):
+        from ids.models import IDSModel
+
+        model = IDSModel(n_features=6, n_classes=3, hidden=16, ae_hidden=8)
+        x = torch.randn(4, 6)
+        logits, features = model(x)
+        embeddings = model.get_embed(x)
+        recon = model.ae(x)
+
+        self.assertEqual(tuple(logits.shape), (4, 3))
+        self.assertEqual(tuple(features.shape), (4, 16))
+        self.assertEqual(tuple(embeddings.shape), (4, 64))
+        self.assertEqual(tuple(recon.shape), (4, 6))
+
+    def test_focal_loss_output_range(self):
+        from ids.losses import FocalLoss
+
+        criterion = FocalLoss(n_classes=3, gamma=2.0)
+        logits = torch.tensor([[2.0, 0.2, -1.0], [0.1, 1.5, -0.2]], dtype=torch.float32)
+        labels = torch.tensor([0, 1], dtype=torch.long)
+        loss = criterion(logits, labels)
+
+        self.assertTrue(torch.isfinite(loss))
+        self.assertGreaterEqual(float(loss.item()), 0.0)
+
+    def test_dataset_split_sizes(self):
+        import numpy as np
+        from ids.dataset import prepare_splits
+
+        rows = []
+        for attack_cat, label, offset, n in [
+            ("Normal", 0, 0.0, 20),
+            ("DoS", 1, 1.0, 20),
+            ("Fuzzers", 1, 2.0, 10),
+        ]:
+            for i in range(n):
+                rows.append({
+                    "attack_cat": attack_cat,
+                    "label": label,
+                    "dur": 1.0 + i * 0.01 + offset,
+                    "sbytes": 100 + i + offset,
+                    "dbytes": 80 + i + offset,
+                    "spkts": 10 + i % 3,
+                    "dpkts": 8 + i % 4,
+                })
+        df = pd.DataFrame(rows)
+
+        splits = prepare_splits(
+            df,
+            known_cats=["Normal", "DoS"],
+            zd_cats=["Fuzzers"],
+            test_ratio=0.20,
+            val_ratio=0.10,
+            seed=7,
+        )
+
+        self.assertEqual(len(splits["X_train"]), 28)
+        self.assertEqual(len(splits["X_val"]), 4)
+        self.assertEqual(len(splits["X_test"]), 8)
+        self.assertEqual(len(splits["X_zd"]), 10)
+        self.assertEqual(splits["n_classes"], 2)
+        self.assertTrue(np.isfinite(splits["X_train"]).all())
+
     def test_recon_dos_separation(self):
         from ids_v14_unswnb15 import SupConLoss, class_prototype_cosine_similarity
 

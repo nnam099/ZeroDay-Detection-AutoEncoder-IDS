@@ -5,7 +5,7 @@ DATA_DIR=${DATA_DIR:-"data/"}
 SAVE_DIR=${SAVE_DIR:-"checkpoints/"}
 PLOT_DIR=${PLOT_DIR:-"plots/"}
 
-python src/ids_v14_unswnb15.py \
+python train.py \
   --data_dir "$DATA_DIR" \
   --save_dir "$SAVE_DIR" \
   --plot_dir "$PLOT_DIR" \

@@ -21,7 +21,7 @@ Main flow:
 ## Current Status
 
 - v14 is the operational default because local artifacts exist in `checkpoints/`.
-- `scripts/smoke_check.py` passes locally with 33 tests.
+- `scripts/smoke_check.py` passes locally with 36 tests.
 - Smoke coverage includes artifact contract validation, threshold metadata validation, artifact manifest hashing, duplicate feature-name rejection, environment readiness checks, export config handling, checkpoint metadata patch logic, SQLite alert store persistence, CSV input guardrails, CSV normalization quality checks, dashboard preprocessing/context contracts, AI context selection, alert queue filtering, top-N batch alert selection, alert entity enrichment, lightweight correlation, Recon/DoS prototype separation, LLM fallback behavior, MITRE mapping and v14 artifact loading.
 - `llm_agent.py` lazy-loads provider clients, so importing dashboard code does not require an API key.
 - A Windows GitHub Actions smoke workflow is available at `.github/workflows/smoke.yml`.
@@ -44,7 +44,9 @@ Main flow:
 
 ```text
 src/
-  ids_v14_unswnb15.py      # train/evaluate/export pipeline v14
+  train.py                 # v14 training entry point
+  ids/                     # v14 model, dataset, losses, trainer, evaluator, thresholds and plots
+  ids_v14_unswnb15.py      # compatibility wrapper for older imports/commands
   ids_v15_unswnb15.py      # experimental v15 pipeline
   inference_runtime.py     # pure verdict/zero-day/risk/CSV-quality helpers used by dashboard
   dashboard_runtime.py     # Streamlit-free dashboard preprocessing, AI context and fallback helpers
@@ -167,7 +169,7 @@ If model or pipeline artifacts are missing, the dashboard falls back to demo mod
 Train v14:
 
 ```bash
-python src/ids_v14_unswnb15.py --data_dir data/ --save_dir checkpoints/ --plot_dir plots/
+python train.py --data_dir data/ --save_dir checkpoints/ --plot_dir plots/
 ```
 
 PowerShell launcher:
@@ -209,7 +211,7 @@ or symlink the CSV files into one training directory before running:
 
 ```bash
 cd /kaggle/working/ZeroDay-Detection-AutoEncoder-IDS
-python src/ids_v14_unswnb15.py \
+python train.py \
   --data_dir /kaggle/working/data \
   --save_dir /kaggle/working/checkpoints \
   --plot_dir /kaggle/working/plots \

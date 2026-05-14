@@ -7,7 +7,7 @@ Updated: 2026-05-14
 - `scripts/smoke_check.py` now runs with UTF-8 subprocess settings, so it works on Windows paths containing Vietnamese characters.
 - `scripts/check_environment.py` now configures UTF-8 console output before printing JSON, so direct execution works from Windows paths containing Vietnamese characters.
 - Python compile passes for `src/`, `dashboard/`, `export_model.py`, `patch_checkpoint.py` and `tests/`.
-- Smoke tests pass locally: 33 tests.
+- Smoke tests pass locally: 36 tests.
 - Checkpoint `ids_v14_model.pth` loads into `IDSModel` v14 without missing or unexpected weights.
 - Pipeline v14 has 61 features and matches `n_features` in the checkpoint.
 - `log_normalizer.py` maps common firewall/flow CSV columns into an UNSW-like flow schema.
@@ -21,6 +21,7 @@ Updated: 2026-05-14
 - v14 training now reduces DoS focal over-weighting and explicitly penalizes Recon/DoS cross-confusion in focal and contrastive objectives.
 - v14 hybrid anomaly scoring now fits a validation meta-learner from `ae_re` and classifier uncertainty, and the weak energy OOD comparator is removed from v14 reports.
 - v14 can optionally adapt the AE reconstruction threshold from recent normal traffic and plot threshold drift over the test timeline.
+- v14 training code is split into `src/ids/` modules with a `train.py` entry point while retaining the legacy `ids_v14_unswnb15.py` wrapper.
 - `llm_agent.py` no longer initializes the provider client on import; it initializes lazily when LLM output is requested.
 - `patch_checkpoint.py` now validates checkpoint structure, accepts a path argument and creates a backup by default.
 - `artifact_validator.py` rejects duplicate/empty feature names and invalid threshold metadata.
