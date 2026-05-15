@@ -30,7 +30,19 @@ def module_available(name: str) -> bool:
 
 
 def collect_environment() -> dict:
-    packages = ["torch", "numpy", "pandas", "sklearn", "matplotlib", "streamlit", "shap", "dotenv"]
+    packages = [
+        "torch",
+        "numpy",
+        "pandas",
+        "sklearn",
+        "matplotlib",
+        "fastapi",
+        "uvicorn",
+        "httpx",
+        "streamlit",
+        "shap",
+        "dotenv",
+    ]
     provider_keys = {
         "groq": "GROQ_API_KEY",
         "gemini": "GEMINI_API_KEY",
@@ -76,7 +88,7 @@ def assess_readiness(env: dict) -> dict:
     warnings: list[str] = []
 
     packages = env.get("packages", {})
-    for package in ["torch", "numpy", "pandas", "sklearn", "matplotlib", "dotenv"]:
+    for package in ["torch", "numpy", "pandas", "sklearn", "matplotlib", "fastapi", "uvicorn", "httpx", "dotenv"]:
         if not packages.get(package):
             blockers.append(f"Missing required package: {package}")
 

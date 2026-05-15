@@ -157,7 +157,7 @@ def run_batch_scores(raw_features: np.ndarray, artifacts: IDSArtifacts, batch_si
         ae_threshold=float(artifacts.thresholds.get("ae_re", 0.5)),
         hybrid_threshold=float(artifacts.thresholds.get("hybrid", 0.5)),
     )
-    verdict = [_traffic_verdict_bool(zd, cls) for zd, cls in zip(is_zeroday, pred_class)]
+    verdict = [_traffic_verdict_bool(zd, cls) for zd, cls in zip(is_zeroday, pred_class, strict=True)]
 
     out = pd.DataFrame({
         "predicted_class": verdict,

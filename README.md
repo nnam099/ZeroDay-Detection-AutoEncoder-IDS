@@ -21,8 +21,8 @@ Main flow:
 ## Current Status
 
 - v14 is the operational default because local artifacts exist in `checkpoints/`.
-- Runtime dependencies are pinned in `requirements.txt`; test-only dependencies are in `requirements-dev.txt`.
-- `scripts/smoke_check.py` passes locally with 39 tests.
+- Runtime dependencies are pinned in `requirements.txt`; smoke-check dependency ranges are in `requirements-smoke.txt`; developer tooling is in `requirements-dev.txt`.
+- `scripts/smoke_check.py` passes locally with 43 tests.
 - Smoke coverage includes artifact contract validation, threshold metadata validation, artifact manifest hashing, duplicate feature-name rejection, environment readiness checks, export config handling, checkpoint metadata patch logic, SQLite alert store persistence, CSV input guardrails, CSV normalization quality checks, dashboard preprocessing/context contracts, AI context selection, alert queue filtering, top-N batch alert selection, alert entity enrichment, lightweight correlation, Recon/DoS prototype separation, LLM fallback behavior, MITRE mapping and v14 artifact loading.
 - `llm_agent.py` lazy-loads provider clients, so importing dashboard code does not require an API key.
 - A Windows GitHub Actions smoke workflow is available at `.github/workflows/smoke.yml`.
@@ -90,7 +90,7 @@ scripts/
 
 Recommended:
 
-- Python 3.9+ for local work. Python 3.11 is used by CI.
+- Python 3.11 for pinned runtime work. Python 3.11 is used by CI.
 - Windows PowerShell or a Unix-like shell.
 
 Clone the correct repository:
@@ -126,6 +126,12 @@ Developer test dependencies:
 ```powershell
 python -m pip install --progress-bar off -r requirements-dev.txt
 ```
+
+Dependency policy:
+
+- `requirements.txt` is the lock-style runtime set for dashboard/API/demo execution.
+- `requirements-smoke.txt` keeps broad lower bounds so CI can run compile, lint and unit smoke checks without installing optional dashboard/LLM extras.
+- `requirements-dev.txt` contains local developer tools such as `ruff`, `pytest` and `pre-commit`.
 
 The UTF-8 environment variables avoid console encoding failures when the project path contains Vietnamese characters.
 
@@ -187,6 +193,10 @@ Important environment variables:
 | `IDS_DATA_DIR` | Dataset directory |
 | `IDS_SAMPLE_DATA_PATH` | Sample CSV path for dashboard |
 | `IDS_ALERT_DB_PATH` | SQLite alert history path, default `results/alerts.sqlite3` |
+| `IDS_DASHBOARD_MAX_CSV_BYTES` | Max uploaded CSV size for dashboard parsing, default `52428800` |
+| `IDS_DASHBOARD_MAX_CSV_ROWS` | Max uploaded CSV rows for dashboard batch inference, default `100000` |
+| `IDS_DASHBOARD_PREVIEW_MAX_ROWS` | Max raw CSV preview rows, default `1000` |
+| `IDS_DASHBOARD_SESSION_RAW_MAX_ROWS` | Max raw CSV rows retained in Streamlit session state, default `100000` |
 | `LLM_PROVIDER` | `none`, `groq`, `gemini`, `openai` or `anthropic` |
 
 If model or pipeline artifacts are missing, the dashboard falls back to demo mode. Alert history is persisted locally in SQLite; database files are ignored by git.
@@ -326,6 +336,12 @@ $env:PYTHONIOENCODING="utf-8"
 python scripts/smoke_check.py
 ```
 
+Run lint only:
+
+```powershell
+python -m ruff check .
+```
+
 ## Troubleshooting
 
 | Symptom | Check |
@@ -372,6 +388,7 @@ Run the full local quality gate:
 Or run commands separately:
 
 ```bash
+python -m ruff check .
 python -m compileall src dashboard scripts export_model.py patch_checkpoint.py tests
 python -m unittest discover -s tests
 ```

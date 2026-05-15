@@ -18,7 +18,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from ids.models import IDSModel
-from src.serve import app
+from src.serve import app, load_artifacts_from_env
 
 
 class ServeApiTests(unittest.TestCase):
@@ -74,6 +74,37 @@ class ServeApiTests(unittest.TestCase):
         self.assertEqual(set(payload["uncertainty"]), {"entropy", "std_max_class"})
         self.assertIsInstance(payload["uncertainty"]["entropy"], float)
         self.assertIsInstance(payload["uncertainty"]["std_max_class"], float)
+
+    def test_predict_rejects_wrong_feature_count(self):
+        with TestClient(app) as client:
+            response = client.post("/predict", json={"features": [0.0] * 54})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("expected 55 features", response.json()["detail"])
+
+    def test_predict_rejects_non_finite_features(self):
+        with TestClient(app) as client:
+            response = client.post(
+                "/predict",
+                content='{"features":[NaN,0.0,0.0]}',
+                headers={"content-type": "application/json"},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("finite numeric", response.json()["detail"])
+
+    def test_predict_rejects_non_numeric_feature_values(self):
+        with TestClient(app) as client:
+            response = client.post("/predict", json={"features": ["not-a-number"] * 55})
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_artifact_loader_rejects_missing_paths(self):
+        missing_model = Path(self.tmp.name) / "missing-model.pth"
+        os.environ["IDS_MODEL_PATH"] = str(missing_model)
+
+        with self.assertRaisesRegex(RuntimeError, "IDS_MODEL_PATH does not exist"):
+            load_artifacts_from_env()
 
     def _write_dummy_artifacts(self, model_path: Path, pipeline_path: Path):
         n_features = 55

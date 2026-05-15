@@ -1,0 +1,51 @@
+[project]
+name = "zeroday-detection-autoencoder-ids"
+version = "0.1.0"
+description = "Research IDS prototype for UNSW-NB15 zero-day/OOD detection."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "MIT" }
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = [
+    ".venv",
+    "checkpoints",
+    "data",
+    "new",
+    "notebooks",
+    "plots",
+    "results",
+]
+
+[tool.ruff.lint]
+select = [
+    "E4",
+    "E7",
+    "E9",
+    "F",
+    "B",
+    "BLE",
+]
+ignore = [
+    "E402",
+    "E501",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"dashboard/app.py" = ["BLE001"]
+"src/batch_evaluator.py" = ["BLE001"]
+"src/dashboard_runtime.py" = ["BLE001"]
+"src/explainer.py" = ["BLE001", "E701", "E702", "F401"]
+"src/ids/*.py" = ["B007", "B023", "B905", "BLE001", "E401", "E701", "E702", "E722", "F401", "F841"]
+"src/ids_v14_unswnb15.py" = ["F401"]
+"src/ids_v15_unswnb15.py" = ["B007", "B023", "B905", "BLE001", "E401", "E701", "E702", "E722", "F401", "F403", "F405", "F841"]
+"src/llm_agent.py" = ["BLE001"]
+"src/train.py" = ["E401", "E701", "E702", "F401"]
+"tests/test_*.py" = ["B011"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"

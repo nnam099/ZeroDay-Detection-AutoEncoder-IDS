@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 from contextlib import asynccontextmanager
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,8 @@ def _artifacts() -> IDSArtifacts:
 def _prediction_row(features: list[float], artifacts: IDSArtifacts) -> dict[str, Any]:
     if not features:
         raise HTTPException(status_code=400, detail="features must contain at least one value")
+    if any(not isfinite(item) for item in features):
+        raise HTTPException(status_code=400, detail="features must contain only finite numeric values")
 
     expected = int(artifacts.checkpoint.get("n_features", len(artifacts.feature_names)))
     if len(features) != expected:

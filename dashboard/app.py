@@ -361,10 +361,11 @@ except ImportError:
     validate_artifact_contract = None
 
 try:
-    from input_guard import validate_uploaded_csv
+    from input_guard import CSVInputPolicy, validate_uploaded_csv
     HAS_INPUT_GUARD = True
 except ImportError:
     HAS_INPUT_GUARD = False
+    CSVInputPolicy = None
     validate_uploaded_csv = None
 
 from inference_runtime import (
@@ -409,6 +410,11 @@ BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__
 CKPT_DIR = os.getenv("IDS_CHECKPOINT_DIR", os.path.join(BASE_DIR, 'checkpoints'))
 DATA_DIR = os.getenv("IDS_DATA_DIR", os.path.join(BASE_DIR, 'data'))
 ALERT_DB_PATH = os.getenv("IDS_ALERT_DB_PATH", os.path.join(BASE_DIR, 'results', 'alerts.sqlite3'))
+CSV_UPLOAD_MAX_BYTES = int(os.getenv("IDS_DASHBOARD_MAX_CSV_BYTES", str(50 * 1024 * 1024)))
+CSV_UPLOAD_MAX_ROWS = int(os.getenv("IDS_DASHBOARD_MAX_CSV_ROWS", "100000"))
+CSV_UPLOAD_MAX_COLUMNS = int(os.getenv("IDS_DASHBOARD_MAX_CSV_COLUMNS", "250"))
+CSV_PREVIEW_MAX_ROWS = int(os.getenv("IDS_DASHBOARD_PREVIEW_MAX_ROWS", "1000"))
+CSV_SESSION_RAW_MAX_ROWS = int(os.getenv("IDS_DASHBOARD_SESSION_RAW_MAX_ROWS", "100000"))
 
 # v14 is the operational default because this repo currently ships v14 artifacts.
 MODEL_VERSION = os.getenv("IDS_MODEL_VERSION", "v14").strip().lower()
@@ -669,7 +675,9 @@ def preprocess_raw_df(df_raw: pd.DataFrame, feat_cols: list) -> np.ndarray:
     """
     normalizer = None
     if HAS_LOG_NORMALIZER and normalize_real_world_logs is not None:
-        normalizer = lambda frame: normalize_real_world_logs(frame, expected_features=feat_cols)
+        def normalizer(frame):
+            return normalize_real_world_logs(frame, expected_features=feat_cols)
+
     result = runtime_preprocess_dashboard_df(
         df_raw,
         feat_cols,
@@ -1283,9 +1291,18 @@ elif page == "[2] Analyze Alert":
             "Upload CSV (UNSW-NB15 raw hoac log thuc te: firewall, NetFlow, Zeek, Suricata)", type="csv"
         )
         if uploaded:
+            uploaded_size = getattr(uploaded, "size", None)
+            if uploaded_size is not None and uploaded_size > CSV_UPLOAD_MAX_BYTES:
+                st.error(
+                    "CSV qua lon de phan tich trong dashboard: "
+                    f"{uploaded_size:,} bytes > {CSV_UPLOAD_MAX_BYTES:,} bytes. "
+                    "Hay dung scripts/evaluate_csv.py cho batch lon hoac tang IDS_DASHBOARD_MAX_CSV_BYTES."
+                )
+                st.stop()
             file_hash = _uploaded_file_hash(uploaded)
             _reset_bulk_results_for_new_file(file_hash)
             try:
+                uploaded.seek(0)
                 raw_df = pd.read_csv(uploaded)
             except UnicodeDecodeError:
                 uploaded.seek(0)
@@ -1300,7 +1317,12 @@ elif page == "[2] Analyze Alert":
                 st.stop()
             input_validation = None
             if HAS_INPUT_GUARD and validate_uploaded_csv is not None:
-                input_validation = validate_uploaded_csv(raw_df, size_bytes=getattr(uploaded, "size", None))
+                input_policy = CSVInputPolicy(
+                    max_bytes=CSV_UPLOAD_MAX_BYTES,
+                    max_rows=CSV_UPLOAD_MAX_ROWS,
+                    max_columns=CSV_UPLOAD_MAX_COLUMNS,
+                )
+                input_validation = validate_uploaded_csv(raw_df, size_bytes=uploaded_size, policy=input_policy)
                 st.session_state["last_csv_input_validation"] = input_validation.as_dict()
             st.caption(f"File: {uploaded.name} | SHA256: {file_hash[:12]}")
             if input_validation is not None:
@@ -1314,15 +1336,18 @@ elif page == "[2] Analyze Alert":
                     st.warning(warning)
             with st.expander("Preview full CSV", expanded=True):
                 st.caption(f"{len(raw_df):,} rows x {len(raw_df.columns):,} columns")
-                preview_limit = min(len(raw_df), 5000)
-                preview_rows = st.slider(
-                    "So dong preview",
-                    min_value=10,
-                    max_value=preview_limit,
-                    value=min(200, preview_limit),
-                    step=10,
-                    key=f"raw_preview_rows_{file_hash[:8]}",
-                )
+                preview_limit = min(len(raw_df), CSV_PREVIEW_MAX_ROWS)
+                if preview_limit < 10:
+                    preview_rows = preview_limit
+                else:
+                    preview_rows = st.slider(
+                        "So dong preview",
+                        min_value=10,
+                        max_value=preview_limit,
+                        value=min(200, preview_limit),
+                        step=10,
+                        key=f"raw_preview_rows_{file_hash[:8]}",
+                    )
                 st.dataframe(
                     raw_df.head(preview_rows),
                     width="stretch",
@@ -1404,7 +1429,15 @@ elif page == "[2] Analyze Alert":
                                 "decision_rule": str(result_df["zero_day_rule"].iloc[0]) if "zero_day_rule" in result_df else "unknown",
                             }
                             st.session_state['bulk_result_df'] = result_df
-                            st.session_state['bulk_raw_df'] = raw_df.reset_index(drop=True)
+                            if len(raw_df) <= CSV_SESSION_RAW_MAX_ROWS:
+                                st.session_state['bulk_raw_df'] = raw_df.reset_index(drop=True)
+                            else:
+                                st.session_state['bulk_raw_df'] = None
+                                st.warning(
+                                    "Raw CSV khong duoc giu trong session_state vi vuot "
+                                    f"{CSV_SESSION_RAW_MAX_ROWS:,} dong. Bang diem van duoc giu, "
+                                    "nhung chi tiet raw feature sau khi chuyen trang se bi gioi han."
+                                )
                             st.session_state['bulk_source_file_hash'] = file_hash
 
             result_df = st.session_state.get('bulk_result_df')
@@ -1765,7 +1798,7 @@ elif page == "[4] Ask AI":
         "Giai thich feature bat thuong nhat cho toi hieu",
     ]
     cols = st.columns(len(suggestions))
-    for i, (col, q) in enumerate(zip(cols, suggestions)):
+    for i, (col, q) in enumerate(zip(cols, suggestions, strict=True)):
         if col.button(q[:25]+"...", key=f"sug_{i}"):
             st.session_state['pending_question'] = q
 

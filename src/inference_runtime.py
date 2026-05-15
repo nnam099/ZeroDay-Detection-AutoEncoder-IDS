@@ -125,7 +125,7 @@ def run_batch_inference(
         hybrid_threshold=hybrid_threshold,
     )
     is_zeroday = np.asarray(is_zeroday).astype(bool)
-    verdict = [traffic_verdict(zd, cls) for zd, cls in zip(is_zeroday, pred_class)]
+    verdict = [traffic_verdict(zd, cls) for zd, cls in zip(is_zeroday, pred_class, strict=True)]
 
     return pd.DataFrame({
         "predicted_class": verdict,
