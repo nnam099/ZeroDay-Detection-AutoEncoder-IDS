@@ -99,6 +99,51 @@ class ServeApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
 
+    def test_predict_flow_accepts_real_world_event(self):
+        payload = {
+            "event": {
+                "src_ip": "10.0.0.5",
+                "dst_ip": "172.16.1.10",
+                "src_port": 52512,
+                "dst_port": 443,
+                "protocol": "tcp",
+                "service": "https",
+                "duration": 1.25,
+                "bytes": 2048,
+                "packets": 12,
+            }
+        }
+        with TestClient(app) as client:
+            response = client.post("/predict/flow", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(
+            set(body),
+            {
+                "label",
+                "classifier_class",
+                "confidence",
+                "ae_re",
+                "hybrid_score",
+                "is_anomaly",
+                "zero_day_rule",
+                "risk",
+                "normalization",
+            },
+        )
+        self.assertEqual(body["normalization"]["schema"], "firewall_or_flow_csv")
+        self.assertEqual(body["normalization"]["mapped_columns"]["srcip"], "src_ip")
+        self.assertIsInstance(body["risk"], int)
+        self.assertIsInstance(body["is_anomaly"], bool)
+
+    def test_predict_flow_rejects_empty_event(self):
+        with TestClient(app) as client:
+            response = client.post("/predict/flow", json={"event": {}})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("event must contain", response.json()["detail"])
+
     def test_artifact_loader_rejects_missing_paths(self):
         missing_model = Path(self.tmp.name) / "missing-model.pth"
         os.environ["IDS_MODEL_PATH"] = str(missing_model)

@@ -242,6 +242,52 @@ The `features` array must match the checkpoint feature count. The server applies
 
 Uncertainty is estimated with Monte Carlo Dropout over 30 stochastic forward passes. If `uncertainty.entropy > 1.5`, the API response uses `"label": "LOW_CONFIDENCE"` so clients can route the alert for analyst review.
 
+For production-style integrations, use `/predict/flow` with a single firewall, NetFlow, Zeek or Suricata-like event. The API maps common field names into the saved feature contract before scoring:
+
+```powershell
+$event = @{
+  event = @{
+    src_ip = "10.0.0.5"
+    dst_ip = "172.16.1.10"
+    src_port = 52512
+    dst_port = 443
+    protocol = "tcp"
+    service = "https"
+    duration = 1.25
+    bytes = 2048
+    packets = 12
+  }
+} | ConvertTo-Json -Depth 3 -Compress
+Invoke-RestMethod -Uri "http://localhost:8080/predict/flow" -Method Post -ContentType "application/json" -Body $event
+```
+
+The response includes the IDS verdict plus normalization quality so downstream SOC tooling can decide whether to auto-ticket or send the event to manual review:
+
+```json
+{
+  "label": "Zero-Day Candidate",
+  "classifier_class": "Normal",
+  "confidence": 0.42,
+  "ae_re": 0.73,
+  "hybrid_score": 0.86,
+  "is_anomaly": true,
+  "zero_day_rule": "vote_2_of_3",
+  "risk": 88,
+  "normalization": {
+    "schema": "firewall_or_flow_csv",
+    "quality": "MEDIUM",
+    "feature_coverage": 0.72,
+    "mapped_columns": {
+      "srcip": "src_ip",
+      "dstip": "dst_ip"
+    },
+    "warnings": [
+      "Feature coverage is moderate; treat scores as triage signals."
+    ]
+  }
+}
+```
+
 Docker:
 
 ```bash

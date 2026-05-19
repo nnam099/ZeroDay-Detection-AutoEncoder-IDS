@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 import torch
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -16,8 +17,9 @@ SRC_DIR = Path(__file__).resolve().parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from batch_evaluator import IDSArtifacts, load_ids_artifacts, run_batch_scores
+from batch_evaluator import IDSArtifacts, load_ids_artifacts, preprocess_raw_df, run_batch_scores
 from ids.evaluator import predict_with_uncertainty
+from inference_runtime import assess_normalization_quality, risk_score
 
 MODEL_VERSION = "v14"
 LOW_CONFIDENCE_ENTROPY = 1.5
@@ -25,6 +27,10 @@ LOW_CONFIDENCE_ENTROPY = 1.5
 
 class PredictRequest(BaseModel):
     features: list[float]
+
+
+class FlowPredictRequest(BaseModel):
+    event: dict[str, Any]
 
 
 def _required_env_path(name: str) -> str:
@@ -89,6 +95,42 @@ def _prediction_row(features: list[float], artifacts: IDSArtifacts) -> dict[str,
     return row
 
 
+def _flow_prediction(event: dict[str, Any], artifacts: IDSArtifacts) -> dict[str, Any]:
+    if not event:
+        raise HTTPException(status_code=400, detail="event must contain at least one field")
+
+    try:
+        raw_features, normalization_report = preprocess_raw_df(pd.DataFrame([event]), artifacts)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"could not normalize event: {exc}") from exc
+
+    scores = run_batch_scores(raw_features, artifacts, batch_size=1)
+    if scores.empty:
+        raise HTTPException(status_code=500, detail="model produced no prediction")
+
+    row = scores.iloc[0].to_dict()
+    quality = assess_normalization_quality(normalization_report)
+    severity = "HIGH" if bool(row.get("is_zeroday", False)) else "LOW"
+    risk = risk_score(row, severity=severity)
+    return {
+        "label": str(row.get("predicted_class", "Unknown")),
+        "classifier_class": str(row.get("classifier_class", "Unknown")),
+        "confidence": float(row.get("max_prob", 0.0)),
+        "ae_re": float(row.get("ae_re", row.get("ae_score", 0.0))),
+        "hybrid_score": float(row.get("hybrid_score", row.get("hybrid", 0.0))),
+        "is_anomaly": bool(row.get("is_zeroday", False)),
+        "zero_day_rule": str(row.get("zero_day_rule", "")),
+        "risk": risk,
+        "normalization": {
+            "schema": str(normalization_report.get("schema", "unknown")),
+            "quality": quality["level"],
+            "feature_coverage": normalization_report.get("feature_coverage"),
+            "mapped_columns": normalization_report.get("mapped_columns", {}),
+            "warnings": quality["warnings"],
+        },
+    }
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "model_version": MODEL_VERSION}
@@ -111,3 +153,8 @@ async def predict(payload: PredictRequest) -> dict[str, Any]:
             "std_max_class": float(uncertainty.get("std_max_class", 0.0)),
         },
     }
+
+
+@app.post("/predict/flow")
+async def predict_flow(payload: FlowPredictRequest) -> dict[str, Any]:
+    return _flow_prediction(payload.event, _artifacts())
