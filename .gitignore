@@ -4,6 +4,9 @@ __pycache__/
 checkpoints/
 data/*
 !data/README.md
+!data/samples/
+!data/samples/*.csv
+!data/samples/README.md
 .venv/
 *.sqlite
 *.sqlite3

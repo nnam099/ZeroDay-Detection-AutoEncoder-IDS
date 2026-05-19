@@ -425,6 +425,56 @@ present. Override with `IDS_THRESHOLD_PROFILE` if you want to test another
 profile. Local profiles use vote-based OOD candidate decisions by default, so a row
 must cross multiple calibrated signals instead of only the hybrid score.
 
+## Prepare Production Flow Data
+
+For a more realistic deployment workflow, collect traffic with CICFlowMeter and
+export CSV files with columns such as `Flow ID`, `Source IP`, `Destination IP`,
+`Source Port`, `Destination Port`, `Protocol`, `Timestamp`, `Flow Duration`,
+packet counters, byte counters and `Label`.
+
+Normalize those files into the fixed production schema and split them
+chronologically:
+
+```powershell
+python scripts/prepare_production_flow_data.py data\Monday-WorkingHours.csv `
+  data\Tuesday-WorkingHours.csv `
+  --source cicflowmeter `
+  --output-dir results\production_flow_data
+```
+
+The output directory contains:
+
+- `production_flows.csv`: all normalized rows with stable operational columns.
+- `train.csv`, `validation.csv`, `test.csv`: time-ordered splits.
+- `manifest.json`: schema columns, source reports, time range and label counts.
+
+The production schema includes analyst workflow labels:
+
+- `normal`
+- `known_attack`
+- `suspicious`
+- `false_positive`
+- `unknown`
+
+Dataset labels such as `BENIGN`, `DoS Hulk` or `PortScan` are mapped to initial
+`analyst_label` values. To label only reviewed rows, provide an override CSV:
+
+```csv
+flow_id,analyst_label,attack_category
+10.0.0.8-172.16.1.20-44444-80-6,suspicious,Needs review
+```
+
+Then run:
+
+```powershell
+python scripts/prepare_production_flow_data.py data\Monday-WorkingHours.csv `
+  --label-overrides labels\reviewed_flows.csv `
+  --label-key flow_id `
+  --output-dir results\production_flow_data
+```
+
+Committed samples for parser and smoke tests are in `data/samples/`.
+
 Run the full local quality gate:
 
 ```powershell

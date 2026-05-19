@@ -292,6 +292,75 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertGreaterEqual(report.feature_coverage, 0.7)
         self.assertEqual(report.schema, "firewall_or_flow_csv")
 
+    def test_production_schema_prepares_cicflowmeter_rows(self):
+        from production_schema import (
+            PRODUCTION_FLOW_COLUMNS,
+            apply_label_overrides,
+            normalize_to_production_schema,
+            split_by_event_time,
+            summarize_production_flows,
+        )
+
+        sample_path = Path(ROOT_DIR) / "data" / "samples" / "cicflowmeter_sample.csv"
+        raw = pd.read_csv(sample_path)
+
+        result = normalize_to_production_schema(raw, source="cicflowmeter", source_file=sample_path.name)
+
+        self.assertEqual(list(result.data.columns), PRODUCTION_FLOW_COLUMNS)
+        self.assertEqual(result.report["normalization_report"]["schema"], "cic_ids2017")
+        self.assertEqual(result.data.loc[0, "analyst_label"], "normal")
+        self.assertEqual(result.data.loc[1, "analyst_label"], "known_attack")
+        self.assertTrue(str(result.data.loc[0, "event_time"]).startswith("2026-05-19T08:00:00"))
+        self.assertGreater(float(result.data.loc[0, "duration"]), 0)
+
+        overrides = pd.DataFrame({
+            "flow_id": [result.data.loc[1, "flow_id"]],
+            "analyst_label": ["suspicious"],
+            "attack_category": ["Needs review"],
+        })
+        reviewed = apply_label_overrides(result.data, overrides)
+        self.assertEqual(reviewed.loc[1, "analyst_label"], "suspicious")
+        self.assertEqual(reviewed.loc[1, "attack_category"], "Needs review")
+
+        split = split_by_event_time(reviewed, train_ratio=0.34, validation_ratio=0.33, test_ratio=0.33)
+        self.assertEqual(set(split["split"]), {"train", "validation", "test"})
+        summary = summarize_production_flows(split)
+        self.assertEqual(summary["rows"], 3)
+        self.assertEqual(summary["source_distribution"]["cicflowmeter"], 3)
+
+    def test_prepare_production_flow_data_cli_writes_splits(self):
+        import scripts.prepare_production_flow_data as prep
+
+        sample_path = Path(ROOT_DIR) / "data" / "samples" / "cicflowmeter_sample.csv"
+        with tempfile.TemporaryDirectory() as tmp:
+            old_argv = sys.argv
+            sys.argv = [
+                "prepare_production_flow_data.py",
+                str(sample_path),
+                "--output-dir",
+                tmp,
+                "--train-ratio",
+                "0.34",
+                "--validation-ratio",
+                "0.33",
+                "--test-ratio",
+                "0.33",
+            ]
+            try:
+                exit_code = prep.main()
+            finally:
+                sys.argv = old_argv
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(os.path.exists(os.path.join(tmp, "production_flows.csv")))
+            self.assertTrue(os.path.exists(os.path.join(tmp, "train.csv")))
+            self.assertTrue(os.path.exists(os.path.join(tmp, "validation.csv")))
+            self.assertTrue(os.path.exists(os.path.join(tmp, "test.csv")))
+            with open(os.path.join(tmp, "manifest.json"), encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            self.assertEqual(manifest["summary"]["rows"], 3)
+            self.assertEqual(manifest["schema_version"], 1)
+
     def test_input_guard_rejects_bad_csv_shape(self):
         from input_guard import CSVInputPolicy, validate_uploaded_csv
 
