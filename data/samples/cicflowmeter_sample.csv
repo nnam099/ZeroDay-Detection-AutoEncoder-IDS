@@ -1,0 +1,4 @@
+Flow ID,Source IP,Source Port,Destination IP,Destination Port,Protocol,Timestamp,Flow Duration,Total Fwd Packets,Total Backward Packets,Total Length of Fwd Packets,Total Length of Bwd Packets,Fwd IAT Mean,Bwd IAT Mean,SYN Flag Count,ACK Flag Count,FIN Flag Count,RST Flag Count,Label
+10.0.0.5-172.16.1.10-52512-443-6,10.0.0.5,52512,172.16.1.10,443,6,2026-05-19 08:00:00,1250000,10,12,1400,3200,120000,100000,1,12,0,0,BENIGN
+10.0.0.8-172.16.1.20-44444-80-6,10.0.0.8,44444,172.16.1.20,80,6,2026-05-19 08:05:00,250000,200,2,120000,180,1000,1500,25,180,0,1,DoS Hulk
+10.0.0.9-172.16.1.25-50123-22-6,10.0.0.9,50123,172.16.1.25,22,6,2026-05-19 08:10:00,900000,4,5,320,420,210000,180000,1,5,1,0,PortScan

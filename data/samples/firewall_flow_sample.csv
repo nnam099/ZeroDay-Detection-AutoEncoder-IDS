@@ -1,0 +1,3 @@
+timestamp,src_ip,dst_ip,src_port,dst_port,protocol,service,duration,sent_bytes,received_bytes,sent_pkts,received_pkts,action,label
+2026-05-19T09:00:00Z,10.1.0.10,172.20.0.5,53111,443,tcp,https,1.4,1800,4200,12,16,CON,benign
+2026-05-19T09:02:00Z,10.1.0.15,172.20.0.9,44444,3389,tcp,rdp,0.2,80,40,2,1,RST,suspicious
