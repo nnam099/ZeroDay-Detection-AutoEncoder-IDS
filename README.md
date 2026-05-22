@@ -22,8 +22,8 @@ Main flow:
 
 - v14 is the operational default because local artifacts exist in `checkpoints/`.
 - Runtime dependencies are pinned in `requirements.txt`; smoke-check dependency ranges are in `requirements-smoke.txt`; developer tooling is in `requirements-dev.txt`.
-- `scripts/smoke_check.py` passes locally with 43 tests.
-- Smoke coverage includes artifact contract validation, threshold metadata validation, artifact manifest hashing, duplicate feature-name rejection, environment readiness checks, export config handling, checkpoint metadata patch logic, SQLite alert store persistence, CSV input guardrails, CSV normalization quality checks, dashboard preprocessing/context contracts, AI context selection, alert queue filtering, top-N batch alert selection, alert entity enrichment, lightweight correlation, Recon/DoS prototype separation, LLM fallback behavior, MITRE mapping and v14 artifact loading.
+- `scripts/smoke_check.py` passes locally with 48 tests.
+- Smoke coverage includes artifact contract validation, threshold metadata validation, artifact manifest hashing, duplicate feature-name rejection, environment readiness checks, export config handling, checkpoint metadata patch logic, SQLite alert store persistence, CSV input guardrails, CSV normalization quality checks, dashboard preprocessing/context contracts, AI context selection, alert queue filtering, top-N batch alert selection, alert entity enrichment, lightweight correlation, time-window incident grouping, Recon/DoS prototype separation, LLM fallback behavior, MITRE mapping and v14 artifact loading.
 - `llm_agent.py` lazy-loads provider clients, so importing dashboard code does not require an API key.
 - A Windows GitHub Actions smoke workflow is available at `.github/workflows/smoke.yml`.
 - A Dockerfile is available for FastAPI inference on port `8080`.
@@ -37,6 +37,7 @@ Main flow:
 - FastAPI inference server for real-time JSON predictions from saved v14 artifacts.
 - Monte Carlo Dropout uncertainty for served predictions, with `LOW_CONFIDENCE` labeling when entropy is high.
 - SQLite alert store for persisted queue history, status, analyst notes, queue filtering, top-N batch alert persistence and lightweight correlation groups.
+- Time-window incident grouping across repeated source IP, service, class and attack-family signals in the analyst queue.
 - Real-world CSV normalization for common firewall/flow/Zeek/Suricata-like exports.
 - CSV upload guardrails for empty, oversized or malformed files.
 - SHAP top-feature explanation.

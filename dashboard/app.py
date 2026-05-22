@@ -383,6 +383,7 @@ from dashboard_runtime import (
     answer_analyst_question as runtime_answer_analyst_question,
     build_alert_context_from_log as runtime_build_alert_context_from_log,
     build_ai_context_options as runtime_build_ai_context_options,
+    build_time_window_incidents as runtime_build_time_window_incidents,
     build_top_batch_alerts as runtime_build_top_batch_alerts,
     correlate_alerts as runtime_correlate_alerts,
     default_ai_context_index as runtime_default_ai_context_index,
@@ -1155,6 +1156,25 @@ if page == "[1] Dashboard":
                     "Sample Alert IDs": ", ".join(item["alert_ids"]),
                 } for item in correlations[:25]])
                 st.dataframe(corr_df, width="stretch", hide_index=True)
+
+            incidents = runtime_build_time_window_incidents(filtered_history, window_minutes=15, min_alerts=2)
+            if incidents:
+                st.markdown("### Incident Windows")
+                incident_df = pd.DataFrame([{
+                    "Incident": item["incident_id"],
+                    "Group": item["group_type"],
+                    "Key": item["key"],
+                    "Window": f"{item['start_time']} -> {item['end_time']}",
+                    "Alerts": item["alert_count"],
+                    "OOD": item["ood_count"],
+                    "High Risk": item["high_count"],
+                    "Max Risk": int(item["max_risk"]),
+                    "Severity": item["severity"],
+                    "Signals": ", ".join(item["primary_classes"] or item["families"]),
+                    "Focus": item["recommended_focus"],
+                    "Sample Alert IDs": ", ".join(item["alert_ids"]),
+                } for item in incidents[:25]])
+                st.dataframe(incident_df, width="stretch", hide_index=True)
 
             st.markdown("### Alert Disposition")
             selected_alert_id = st.selectbox("Alert", hist_df["Alert ID"].tolist())

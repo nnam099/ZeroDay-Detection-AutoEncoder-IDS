@@ -668,6 +668,68 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertEqual(dos_group["ood_count"], 1)
         self.assertEqual(dos_group["max_risk"], 90)
 
+    def test_dashboard_runtime_builds_time_window_incidents(self):
+        from dashboard_runtime import build_time_window_incidents
+
+        alerts = [
+            {
+                "alert_id": "A1",
+                "timestamp": "2026-05-14 10:00:00",
+                "src_ip": "10.0.0.5",
+                "service": "https",
+                "classifier_class": "DoS",
+                "zero_day_family": "Shellcode",
+                "is_zeroday": True,
+                "risk": 92,
+                "llm_severity": "CRITICAL",
+            },
+            {
+                "alert_id": "A2",
+                "timestamp": "2026-05-14 10:08:00",
+                "src_ip": "10.0.0.5",
+                "service": "https",
+                "classifier_class": "DoS",
+                "zero_day_family": "Shellcode",
+                "is_zeroday": False,
+                "risk": 76,
+                "llm_severity": "HIGH",
+            },
+            {
+                "alert_id": "A3",
+                "timestamp": "2026-05-14 10:40:00",
+                "src_ip": "10.0.0.5",
+                "service": "https",
+                "classifier_class": "DoS",
+                "is_zeroday": False,
+                "risk": 55,
+                "llm_severity": "MEDIUM",
+            },
+            {
+                "alert_id": "A4",
+                "timestamp": "2026-05-14 10:05:00",
+                "src_ip": "10.0.0.8",
+                "service": "dns",
+                "classifier_class": "Normal",
+                "is_zeroday": False,
+                "risk": 10,
+            },
+        ]
+
+        incidents = build_time_window_incidents(alerts, window_minutes=15, min_alerts=2)
+
+        source_incident = next(item for item in incidents if item["group_type"] == "Source IP")
+        self.assertEqual(source_incident["key"], "10.0.0.5")
+        self.assertEqual(source_incident["alert_count"], 2)
+        self.assertEqual(source_incident["ood_count"], 1)
+        self.assertEqual(source_incident["high_count"], 2)
+        self.assertEqual(source_incident["max_risk"], 92)
+        self.assertEqual(source_incident["severity"], "CRITICAL")
+        self.assertEqual(source_incident["primary_classes"], ["DoS"])
+        self.assertEqual(source_incident["families"], ["Shellcode"])
+        self.assertEqual(source_incident["alert_ids"], ["A1", "A2"])
+        self.assertIn("Source IP: 10.0.0.5", source_incident["recommended_focus"])
+        self.assertTrue(all(item["end_time"] <= "2026-05-14 10:15:00" for item in incidents))
+
     def test_zero_day_vote_decision_requires_multiple_signals(self):
         from inference_runtime import zero_day_decision
 

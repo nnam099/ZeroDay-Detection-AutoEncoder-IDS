@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
 
-from inference_runtime import traffic_verdict
+from inference_runtime import risk_score, severity_rank, traffic_verdict
 
 
 Normalizer = Callable[[pd.DataFrame], tuple[pd.DataFrame, Any]]
@@ -246,6 +247,54 @@ def correlate_alerts(alerts: list[dict[str, Any]], min_count: int = 2) -> list[d
     return sorted(out, key=lambda item: (item["alert_count"], item["ood_count"], item["max_risk"]), reverse=True)
 
 
+def build_time_window_incidents(
+    alerts: list[dict[str, Any]],
+    window_minutes: int = 15,
+    min_alerts: int = 2,
+    max_alert_ids: int = 12,
+) -> list[dict[str, Any]]:
+    """Group repeated correlated alerts into analyst-friendly incident windows."""
+    if window_minutes <= 0 or min_alerts <= 0:
+        return []
+
+    keyed_events: dict[tuple[str, str], list[tuple[datetime, dict[str, Any]]]] = {}
+    for alert in alerts:
+        event_time = _parse_alert_time(alert)
+        if event_time is None:
+            continue
+        for group_type, key in _correlation_keys(alert):
+            if group_type == "Batch File":
+                continue
+            keyed_events.setdefault((group_type, key), []).append((event_time, alert))
+
+    window = timedelta(minutes=window_minutes)
+    incidents: list[dict[str, Any]] = []
+    for (group_type, key), events in keyed_events.items():
+        events = sorted(events, key=lambda item: item[0])
+        cluster: list[tuple[datetime, dict[str, Any]]] = []
+        cluster_start: datetime | None = None
+        for event_time, alert in events:
+            if cluster_start is None or event_time - cluster_start <= window:
+                if cluster_start is None:
+                    cluster_start = event_time
+                cluster.append((event_time, alert))
+                continue
+            incidents.extend(
+                _incident_from_cluster(group_type, key, cluster, window_minutes, min_alerts, max_alert_ids)
+            )
+            cluster = [(event_time, alert)]
+            cluster_start = event_time
+        incidents.extend(
+            _incident_from_cluster(group_type, key, cluster, window_minutes, min_alerts, max_alert_ids)
+        )
+
+    return sorted(
+        incidents,
+        key=lambda item: (item["max_risk"], item["ood_count"], item["alert_count"], item["end_time"]),
+        reverse=True,
+    )
+
+
 def default_ai_context_index(options: list[AIContextOption], current_alert_id: str | None) -> int:
     for index, option in enumerate(options):
         if option.context.get("alert_id") == current_alert_id:
@@ -339,6 +388,122 @@ def _correlation_keys(alert: dict[str, Any]) -> list[tuple[str, str]]:
         if text and text.lower() not in {"normal", "nan", "none", "null", "-", "unknown"}:
             out.append((group_type, text))
     return out
+
+
+def _incident_from_cluster(
+    group_type: str,
+    key: str,
+    cluster: list[tuple[datetime, dict[str, Any]]],
+    window_minutes: int,
+    min_alerts: int,
+    max_alert_ids: int,
+) -> list[dict[str, Any]]:
+    if len(cluster) < min_alerts:
+        return []
+
+    start = min(item[0] for item in cluster)
+    end = max(item[0] for item in cluster)
+    alerts = [item[1] for item in cluster]
+    risks = [_alert_risk(alert) for alert in alerts]
+    max_risk = max(risks) if risks else 0
+    alert_ids = [str(alert.get("alert_id", "")) for alert in alerts if str(alert.get("alert_id", "")).strip()]
+    classes = _top_values(alerts, "classifier_class", fallback_key="predicted_class")
+    families = _top_values(alerts, "zero_day_family")
+    source_ips = _top_values(alerts, "src_ip")
+    services = _top_values(alerts, "service")
+    severity_values = [str(alert.get("llm_severity", "")).upper() for alert in alerts]
+    strongest_severity = max(severity_values, key=severity_rank, default="")
+    severity = strongest_severity if severity_rank(strongest_severity) else _risk_to_severity(max_risk)
+    raw_id = f"{group_type}|{key}|{start.isoformat()}|{end.isoformat()}"
+    incident_id = "INC-" + hashlib.sha1(raw_id.encode("utf-8")).hexdigest()[:10].upper()
+
+    return [{
+        "incident_id": incident_id,
+        "group_type": group_type,
+        "key": key,
+        "window_minutes": window_minutes,
+        "start_time": _format_incident_time(start),
+        "end_time": _format_incident_time(end),
+        "duration_minutes": round(max(0.0, (end - start).total_seconds() / 60), 1),
+        "alert_count": len(alerts),
+        "ood_count": sum(1 for alert in alerts if bool(alert.get("is_zeroday"))),
+        "high_count": sum(1 for alert in alerts if _alert_risk(alert) >= 70),
+        "max_risk": max_risk,
+        "severity": severity,
+        "primary_classes": classes,
+        "families": families,
+        "source_ips": source_ips,
+        "services": services,
+        "alert_ids": alert_ids[:max_alert_ids],
+        "recommended_focus": _incident_focus(group_type, key, classes, families),
+    }]
+
+
+def _parse_alert_time(alert: dict[str, Any]) -> datetime | None:
+    for key in ["timestamp", "event_timestamp", "created_at", "updated_at"]:
+        value = alert.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        normalized = text.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+            return parsed.replace(tzinfo=None)
+        except ValueError:
+            pass
+        for fmt in ["%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%d/%m/%Y %H:%M:%S"]:
+            try:
+                return datetime.strptime(text, fmt)
+            except ValueError:
+                continue
+    return None
+
+
+def _format_incident_time(value: datetime) -> str:
+    return value.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _alert_risk(alert: dict[str, Any]) -> int:
+    if alert.get("risk") is not None:
+        return int(_safe_float(alert.get("risk"), default=0.0))
+    return risk_score(alert, str(alert.get("llm_severity") or alert.get("severity") or ""))
+
+
+def _risk_to_severity(risk: float) -> str:
+    if risk >= 85:
+        return "CRITICAL"
+    if risk >= 70:
+        return "HIGH"
+    if risk >= 40:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _top_values(
+    alerts: list[dict[str, Any]],
+    key: str,
+    fallback_key: str | None = None,
+    limit: int = 3,
+) -> list[str]:
+    counts: dict[str, int] = {}
+    for alert in alerts:
+        value = alert.get(key)
+        if (value is None or str(value).strip().lower() in {"", "nan", "none", "null", "-", "unknown"}) and fallback_key:
+            value = alert.get(fallback_key)
+        text = str(value or "").strip()
+        if text and text.lower() not in {"normal", "nan", "none", "null", "-", "unknown"}:
+            counts[text] = counts.get(text, 0) + 1
+    return [item[0] for item in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]]
+
+
+def _incident_focus(group_type: str, key: str, classes: list[str], families: list[str]) -> str:
+    subject = f"{group_type}: {key}"
+    signals = classes or families
+    if signals:
+        return f"Review repeated alerts for {subject}; dominant signal: {', '.join(signals[:2])}."
+    return f"Review repeated alerts for {subject} within the same time window."
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:

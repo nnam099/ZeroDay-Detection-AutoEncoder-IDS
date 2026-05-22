@@ -1,13 +1,13 @@
 # Project Audit
 
-Updated: 2026-05-14
+Updated: 2026-05-22
 
 ## Verified
 
 - `scripts/smoke_check.py` now runs with UTF-8 subprocess settings, so it works on Windows paths containing Vietnamese characters.
 - `scripts/check_environment.py` now configures UTF-8 console output before printing JSON, so direct execution works from Windows paths containing Vietnamese characters.
 - Python compile passes for `src/`, `dashboard/`, `export_model.py`, `patch_checkpoint.py` and `tests/`.
-- Smoke tests pass locally: 39 tests.
+- Smoke tests pass locally: 48 tests.
 - Checkpoint `ids_v14_model.pth` loads into `IDSModel` v14 without missing or unexpected weights.
 - Pipeline v14 has 61 features and matches `n_features` in the checkpoint.
 - `log_normalizer.py` maps common firewall/flow CSV columns into an UNSW-like flow schema.
@@ -18,6 +18,7 @@ Updated: 2026-05-14
 - Alert history, status and analyst notes can persist across Streamlit reloads through `src/alert_store.py` backed by local SQLite.
 - The alert queue supports status/severity/OOD/search filters, and batch uploads can persist the top N highest-risk rows.
 - Persisted batch alerts retain source/destination/service entities when available and the dashboard surfaces lightweight correlation groups.
+- The dashboard now surfaces 15-minute incident windows for repeated correlated signals across source IPs, destination/service context, classifier classes and zero-day families.
 - v14 training now reduces DoS focal over-weighting and explicitly penalizes Recon/DoS cross-confusion in focal and contrastive objectives.
 - v14 hybrid anomaly scoring now fits a validation meta-learner from `ae_re` and classifier uncertainty, and the weak energy OOD comparator is removed from v14 reports.
 - v14 can optionally adapt the AE reconstruction threshold from recent normal traffic and plot threshold drift over the test timeline.
@@ -44,8 +45,9 @@ Updated: 2026-05-14
 - Dashboard has demo fallback when artifacts are missing and supports common real-world CSV uploads through the normalizer.
 - FastAPI serving reuses saved v14 artifacts and the same persisted `RobustScaler` contract as batch/dashboard inference.
 - Dashboard alert queue can now survive reloads through a local SQLite store.
+- Time-window incident grouping helps analysts distinguish repeated bursts from isolated alerts in the persisted queue.
 - MITRE mapping is packaged separately and is easy to extend with more techniques/evidence rules.
-- Smoke tests cover the highest-risk runtime contracts: artifact compatibility, threshold metadata validation, artifact hash drift detection, duplicate feature metadata rejection, environment readiness reporting, export config handling, checkpoint metadata patching, SQLite alert persistence, CSV input guardrails, normalizer behavior, dashboard preprocessing/context helpers, AI context selection, alert queue filtering, top-N batch alert selection, alert entity enrichment, lightweight correlation, Recon/DoS prototype separation, adaptive threshold windowing, CSV quality classification, MITRE mapping and LLM import/fallback behavior.
+- Smoke tests cover the highest-risk runtime contracts: artifact compatibility, threshold metadata validation, artifact hash drift detection, duplicate feature metadata rejection, environment readiness reporting, export config handling, checkpoint metadata patching, SQLite alert persistence, CSV input guardrails, normalizer behavior, dashboard preprocessing/context helpers, AI context selection, alert queue filtering, top-N batch alert selection, alert entity enrichment, lightweight correlation and time-window incident grouping, Recon/DoS prototype separation, adaptive threshold windowing, CSV quality classification, MITRE mapping and LLM import/fallback behavior.
 
 ## Current Risks
 
@@ -58,9 +60,8 @@ Updated: 2026-05-14
 
 ## Next Priorities
 
-1. Add richer time-window correlation and incident grouping across source IPs, services and attack families.
-2. Regenerate v14 metrics/plots from the current code and update `results/ids_v14_results.json`.
-3. Publish trusted v14 demo artifacts as release assets or an external model artifact bundle.
-4. Fix remaining mojibake in source comments/docstrings that are used in reports or presentations.
-5. Add schema-quality warnings for uploaded CSVs with low feature coverage or missing directional counters.
-6. Train/export v15 artifacts and add v15 artifact smoke tests if v15 will be demonstrated.
+1. Regenerate v14 metrics/plots from the current code and update `results/ids_v14_results.json`.
+2. Publish trusted v14 demo artifacts as release assets or an external model artifact bundle.
+3. Fix remaining mojibake in source comments/docstrings that are used in reports or presentations.
+4. Add schema-quality warnings for uploaded CSVs with low feature coverage or missing directional counters.
+5. Train/export v15 artifacts and add v15 artifact smoke tests if v15 will be demonstrated.
