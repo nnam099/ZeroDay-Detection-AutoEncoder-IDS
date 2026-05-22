@@ -7,7 +7,7 @@ Updated: 2026-05-22
 - `scripts/smoke_check.py` now runs with UTF-8 subprocess settings, so it works on Windows paths containing Vietnamese characters.
 - `scripts/check_environment.py` now configures UTF-8 console output before printing JSON, so direct execution works from Windows paths containing Vietnamese characters.
 - Python compile passes for `src/`, `dashboard/`, `export_model.py`, `patch_checkpoint.py` and `tests/`.
-- Smoke tests pass locally: 48 tests.
+- Smoke tests pass locally: 53 tests, with the v15 artifact smoke test skipped until v15 artifacts exist.
 - Checkpoint `ids_v14_model.pth` loads into `IDSModel` v14 without missing or unexpected weights.
 - Pipeline v14 has 61 features and matches `n_features` in the checkpoint.
 - `log_normalizer.py` maps common firewall/flow CSV columns into an UNSW-like flow schema.
@@ -19,6 +19,9 @@ Updated: 2026-05-22
 - The alert queue supports status/severity/OOD/search filters, and batch uploads can persist the top N highest-risk rows.
 - Persisted batch alerts retain source/destination/service entities when available and the dashboard surfaces lightweight correlation groups.
 - The dashboard now surfaces 15-minute incident windows for repeated correlated signals across source IPs, destination/service context, classifier classes and zero-day families.
+- Dashboard UI rendering has started moving into smaller modules: queue view, alert-analysis safety, batch upload summaries, Ask AI helpers, setup status and shared safety/report copy.
+- `scripts/regenerate_v14_report.py` regenerates artifact evaluation metrics and plots from current saved v14 artifacts without retraining.
+- `results/ids_v14_results.json` now includes detection accuracy, known-class recall, OOD detection rate, normal false-positive rate and threshold profile for `UNSW_NB15_testing-set.csv`.
 - v14 training now reduces DoS focal over-weighting and explicitly penalizes Recon/DoS cross-confusion in focal and contrastive objectives.
 - v14 hybrid anomaly scoring now fits a validation meta-learner from `ae_re` and classifier uncertainty, and the weak energy OOD comparator is removed from v14 reports.
 - v14 can optionally adapt the AE reconstruction threshold from recent normal traffic and plot threshold drift over the test timeline.
@@ -47,21 +50,21 @@ Updated: 2026-05-22
 - Dashboard alert queue can now survive reloads through a local SQLite store.
 - Time-window incident grouping helps analysts distinguish repeated bursts from isolated alerts in the persisted queue.
 - MITRE mapping is packaged separately and is easy to extend with more techniques/evidence rules.
-- Smoke tests cover the highest-risk runtime contracts: artifact compatibility, threshold metadata validation, artifact hash drift detection, duplicate feature metadata rejection, environment readiness reporting, export config handling, checkpoint metadata patching, SQLite alert persistence, CSV input guardrails, normalizer behavior, dashboard preprocessing/context helpers, AI context selection, alert queue filtering, top-N batch alert selection, alert entity enrichment, lightweight correlation and time-window incident grouping, Recon/DoS prototype separation, adaptive threshold windowing, CSV quality classification, MITRE mapping and LLM import/fallback behavior.
+- Smoke tests cover the highest-risk runtime contracts: artifact compatibility, threshold metadata validation, artifact hash drift detection, duplicate feature metadata rejection, environment readiness reporting, export config handling, checkpoint metadata patching, SQLite alert persistence, CSV input guardrails, normalizer behavior, dashboard preprocessing/context helpers, dashboard UI helpers, AI context selection, alert queue filtering, top-N batch alert selection, alert entity enrichment, lightweight correlation and time-window incident grouping, labeled evaluation reporting, API edge cases, Recon/DoS prototype separation, adaptive threshold windowing, CSV quality classification, MITRE mapping and LLM import/fallback behavior.
 
 ## Current Risks
 
-- `dashboard/app.py` is still a large file. Verdict/risk, batch inference, preprocessing, persistence, batch alert context helpers and AI/LLM fallback logic have been split out, but UI rendering and session-state orchestration should be split further for unit testing.
+- `dashboard/app.py` is still a large orchestration file. Major queue rendering and several UI helper areas have been split out, but single-alert investigation and OOD log detail can still be modularized further.
 - Some code comments/docstrings still contain mojibake or ASCII-only Vietnamese text from earlier encoding issues.
-- v14 artifact compatibility is verified, but full model performance metrics have not been regenerated after the latest operational fixes.
-- v15 is experimental. The dashboard can select it, but stable v15 use requires separately trained/exported artifacts.
+- v14 artifact evaluation has been regenerated, but the normal false-positive rate is high, so threshold recalibration or retraining is needed before presenting it as operationally precise.
+- v15 is experimental. The dashboard can select it, but stable v15 use requires separately trained/exported artifacts. The v15 smoke test is present and skipped until artifacts are available.
 - LLM provider packages remain optional and are not installed unless the selected provider is needed.
 - Pretrained artifacts are not yet published as a release/model-registry asset; users must train locally or receive artifacts out of band.
 
 ## Next Priorities
 
-1. Regenerate v14 metrics/plots from the current code and update `results/ids_v14_results.json`.
-2. Publish trusted v14 demo artifacts as release assets or an external model artifact bundle.
-3. Fix remaining mojibake in source comments/docstrings that are used in reports or presentations.
-4. Add schema-quality warnings for uploaded CSVs with low feature coverage or missing directional counters.
-5. Train/export v15 artifacts and add v15 artifact smoke tests if v15 will be demonstrated.
+1. Recalibrate thresholds or retrain v14 to reduce the high normal false-positive rate shown in the regenerated artifact report.
+2. Continue splitting `dashboard/app.py`, especially single-alert investigation and OOD log detail pages.
+3. Publish trusted v14 demo artifacts as release assets or an external model artifact bundle.
+4. Fix remaining mojibake in source comments/docstrings that are used in reports or presentations.
+5. Train/export v15 artifacts if v15 will be demonstrated, then enable the existing v15 artifact smoke test.

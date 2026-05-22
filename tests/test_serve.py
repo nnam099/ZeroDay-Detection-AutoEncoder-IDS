@@ -82,6 +82,13 @@ class ServeApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("expected 55 features", response.json()["detail"])
 
+    def test_predict_rejects_empty_feature_vector(self):
+        with TestClient(app) as client:
+            response = client.post("/predict", json={"features": []})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("at least one", response.json()["detail"])
+
     def test_predict_rejects_non_finite_features(self):
         with TestClient(app) as client:
             response = client.post(
@@ -143,6 +150,12 @@ class ServeApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("event must contain", response.json()["detail"])
+
+    def test_predict_flow_rejects_non_object_event(self):
+        with TestClient(app) as client:
+            response = client.post("/predict/flow", json={"event": []})
+
+        self.assertEqual(response.status_code, 422)
 
     def test_artifact_loader_rejects_missing_paths(self):
         missing_model = Path(self.tmp.name) / "missing-model.pth"

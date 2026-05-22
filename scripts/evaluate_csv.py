@@ -51,7 +51,14 @@ def main() -> int:
     artifacts = load_ids_artifacts(args.model_path, args.pipeline_path, args.model_version)
     raw_features, normalization_report = preprocess_raw_df(raw_df, artifacts)
     scores = run_batch_scores(raw_features, artifacts, batch_size=args.batch_size)
-    summary = summarize_scores(scores, raw_df=raw_df, label_col=args.label_col)
+    summary = summarize_scores(
+        scores,
+        raw_df=raw_df,
+        label_col=args.label_col,
+        class_names=artifacts.class_names,
+        zero_day_labels=list(artifacts.pipeline.get("zd_cats", [])),
+        thresholds=artifacts.thresholds,
+    )
     summary["input_csv"] = os.path.abspath(args.csv_path)
     summary["model_path"] = os.path.abspath(args.model_path)
     summary["pipeline_path"] = os.path.abspath(args.pipeline_path)

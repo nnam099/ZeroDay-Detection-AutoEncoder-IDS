@@ -383,14 +383,17 @@ from dashboard_runtime import (
     answer_analyst_question as runtime_answer_analyst_question,
     build_alert_context_from_log as runtime_build_alert_context_from_log,
     build_ai_context_options as runtime_build_ai_context_options,
-    build_time_window_incidents as runtime_build_time_window_incidents,
     build_top_batch_alerts as runtime_build_top_batch_alerts,
-    correlate_alerts as runtime_correlate_alerts,
     default_ai_context_index as runtime_default_ai_context_index,
-    filter_alert_history as runtime_filter_alert_history,
     preprocess_dashboard_df as runtime_preprocess_dashboard_df,
     triage_alert_with_fallback as runtime_triage_alert_with_fallback,
 )
+from ui_safety import attach_report_safety_note, render_safety_notice
+from views_ai import render_ai_context_card, render_question_suggestions
+from views_analysis import render_analysis_safety_notice
+from views_batch import render_batch_safety_notice, render_bulk_detection_summary, render_ground_truth_summary
+from views_queue import queue_summary, render_queue_view
+from views_setup import render_setup_status
 from alert_store import (
     init_alert_store,
     list_alerts as alert_store_list_alerts,
@@ -943,6 +946,8 @@ def display_result(result: dict, llm: dict):
     sev = str(llm.get('severity', 'HIGH')).upper()
     risk = risk_score(result, sev)
 
+    render_safety_notice(level="warning" if result.get('is_zeroday') else "info")
+
     if result.get('demo_mode'):
         st.info("DEMO SANDBOX - Du lieu gia lap, khong dung de ket luan an ninh.")
 
@@ -1040,7 +1045,7 @@ def display_result(result: dict, llm: dict):
         for i, action in enumerate(actions, 1):
             st.checkbox(f"{i}. {action}", key=f"act_{result['alert_id']}_{i}")
         if st.button("Export JSON Report", key=f"export_{result['alert_id']}"):
-            report = {**result, "llm_analysis": llm}
+            report = attach_report_safety_note({**result, "llm_analysis": llm})
             report.pop('shap_values', None)
             report.pop('probs', None)
             st.download_button(
@@ -1051,7 +1056,7 @@ def display_result(result: dict, llm: dict):
             )
 
     with tab5:
-        report = {**result, "llm_analysis": llm}
+        report = attach_report_safety_note({**result, "llm_analysis": llm})
         report.pop('shap_values', None)
         st.json(report)
 
@@ -1066,17 +1071,13 @@ if page == "[1] Dashboard":
     )
 
     history = load_alert_history()
-    zd = sum(1 for a in history if a.get('is_zeroday'))
-    hi = sum(1 for a in history if a.get('llm_severity') in ['CRITICAL','HIGH'])
-    avg_risk = 0
-    if history:
-        avg_risk = int(np.mean([risk_score(a, a.get('llm_severity')) for a in history]))
+    summary = queue_summary(history)
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Alert Queue", len(history))
-    c2.metric("Critical / High", hi)
-    c3.metric("OOD Hypotheses", zd)
-    c4.metric("Average Risk", f"{avg_risk}/100")
+    c1.metric("Alert Queue", summary["alerts"])
+    c2.metric("Critical / High", summary["critical_high"])
+    c3.metric("OOD Hypotheses", summary["ood"])
+    c4.metric("Average Risk", f"{summary['average_risk']}/100")
     c5.metric("Model Mode", "DEMO" if DEMO_MODE else MODEL_VERSION.upper())
     threshold_profile = PIPELINE_META.get("threshold_profile") if isinstance(PIPELINE_META, dict) else None
     threshold_badge = "LOCAL" if threshold_profile else "ARTIFACT"
@@ -1095,110 +1096,7 @@ if page == "[1] Dashboard":
         unsafe_allow_html=True,
     )
 
-    if history:
-        st.markdown("### Active Alert Queue")
-        f1, f2, f3, f4 = st.columns([0.9, 0.9, 0.9, 1.6])
-        status_values = sorted({str(a.get("status", "new")) for a in history})
-        severity_values = sorted({str(a.get("llm_severity", "N/A")).upper() for a in history})
-        status_filter = f1.selectbox("Status", ["All"] + status_values)
-        severity_filter = f2.selectbox("Severity", ["All"] + severity_values)
-        ood_filter = f3.selectbox("OOD", ["All", "OOD only", "Known only"])
-        search_query = f4.text_input("Search alert queue", "")
-        filtered_history = runtime_filter_alert_history(
-            history,
-            status=status_filter,
-            severity=severity_filter,
-            ood_filter=ood_filter,
-            query=search_query,
-        )
-        hist_columns = [
-            "Alert ID", "Time", "Status", "Source", "Severity", "Risk",
-            "Class", "Hybrid Score", "AE Score", "OOD Candidate",
-        ]
-        hist_rows = [{
-            "Alert ID"    : a['alert_id'],
-            "Time"        : a['timestamp'],
-            "Status"      : a.get('status', 'new'),
-            "Source"      : a.get('source', 'session'),
-            "Severity"    : a.get('llm_severity', 'N/A'),
-            "Risk"        : risk_score(a, a.get('llm_severity')),
-            "Class"       : a['predicted_class'],
-            "Hybrid Score": round(a['hybrid_score'], 3),
-            "AE Score"    : round(a.get('ae_score', 0), 3),
-            "OOD Candidate": "YES" if a['is_zeroday'] else "NO",
-        } for a in filtered_history]
-        hist_df = pd.DataFrame(hist_rows, columns=hist_columns)
-        hist_df = hist_df.sort_values(["Risk", "Time"], ascending=[False, False])
-        st.caption(f"Showing {len(filtered_history):,} of {len(history):,} persisted alerts")
-        st.dataframe(hist_df, width="stretch", hide_index=True)
-
-        if not hist_df.empty:
-            left, right = st.columns([1.1, 1])
-            with left:
-                st.markdown("### Severity Distribution")
-                sev_counts = hist_df["Severity"].value_counts().rename_axis("Severity").reset_index(name="Count")
-                st.bar_chart(sev_counts.set_index("Severity"))
-            with right:
-                st.markdown("### OOD Candidate Mix")
-                zd_counts = hist_df["OOD Candidate"].value_counts().rename_axis("OOD Candidate").reset_index(name="Count")
-                st.bar_chart(zd_counts.set_index("OOD Candidate"))
-
-            correlations = runtime_correlate_alerts(filtered_history, min_count=2)
-            if correlations:
-                st.markdown("### Correlated Alert Groups")
-                corr_df = pd.DataFrame([{
-                    "Group": item["group_type"],
-                    "Key": item["key"],
-                    "Alerts": item["alert_count"],
-                    "OOD": item["ood_count"],
-                    "Max Risk": int(item["max_risk"]),
-                    "Latest": item["latest_time"],
-                    "Sample Alert IDs": ", ".join(item["alert_ids"]),
-                } for item in correlations[:25]])
-                st.dataframe(corr_df, width="stretch", hide_index=True)
-
-            incidents = runtime_build_time_window_incidents(filtered_history, window_minutes=15, min_alerts=2)
-            if incidents:
-                st.markdown("### Incident Windows")
-                incident_df = pd.DataFrame([{
-                    "Incident": item["incident_id"],
-                    "Group": item["group_type"],
-                    "Key": item["key"],
-                    "Window": f"{item['start_time']} -> {item['end_time']}",
-                    "Alerts": item["alert_count"],
-                    "OOD": item["ood_count"],
-                    "High Risk": item["high_count"],
-                    "Max Risk": int(item["max_risk"]),
-                    "Severity": item["severity"],
-                    "Signals": ", ".join(item["primary_classes"] or item["families"]),
-                    "Focus": item["recommended_focus"],
-                    "Sample Alert IDs": ", ".join(item["alert_ids"]),
-                } for item in incidents[:25]])
-                st.dataframe(incident_df, width="stretch", hide_index=True)
-
-            st.markdown("### Alert Disposition")
-            selected_alert_id = st.selectbox("Alert", hist_df["Alert ID"].tolist())
-            selected_alert = next((a for a in history if a.get("alert_id") == selected_alert_id), {})
-            status_options = ["new", "triaged", "investigating", "confirmed", "false_positive", "closed"]
-            current_status = selected_alert.get("status", "new")
-            status_idx = status_options.index(current_status) if current_status in status_options else 0
-            d1, d2 = st.columns([0.8, 1.2])
-            new_status = d1.selectbox("Status", status_options, index=status_idx)
-            analyst_note = d2.text_input("Analyst note", value=str(selected_alert.get("analyst_note", "")))
-            if st.button("Update alert status", key="update_alert_status"):
-                update_persisted_alert_status(selected_alert_id, new_status, analyst_note)
-                st.rerun()
-        else:
-            st.info("No persisted alerts match the current filters.")
-    else:
-        st.markdown(
-            """
-            <div class="soc-panel">
-                No alerts in the current analyst session. Use Analyze Alert to pull a sample, upload a CSV, or run a manual triage scenario.
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    render_queue_view(history, update_persisted_alert_status)
 
     if DEMO_MODE:
         st.warning("Model chua duoc load. Xem tab '[4] Setup Guide' de biet cach cai dat.")
@@ -1212,8 +1110,7 @@ elif page == "[2] Analyze Alert":
         "Run single-alert triage, inspect model evidence, map hypotheses to MITRE ATT&CK, and generate response actions.",
     )
 
-    if DEMO_MODE:
-        st.warning("DEMO SANDBOX: Model chua duoc load. Ket qua gia lap khong duoc dua vao analyst queue.")
+    render_analysis_safety_notice(DEMO_MODE)
 
     bg_data = None
     comps   = {}
@@ -1299,6 +1196,7 @@ elif page == "[2] Analyze Alert":
             display_result(result, llm)
 
     else:  # Upload CSV
+        render_batch_safety_notice()
         persist_top_n = st.number_input(
             "Persist top batch alerts",
             min_value=0,
@@ -1500,30 +1398,8 @@ elif page == "[2] Analyze Alert":
                     height=620,
                 )
 
-                total = len(result_df)
-                zd_cnt = int(result_df['is_zeroday'].sum())
-                st.metric("OOD candidates", zd_cnt)
-                st.metric("OOD candidate rate", f"{(zd_cnt/total*100):.2f}%")
-                verdict_counts = (
-                    result_df["detection"]
-                    .value_counts()
-                    .reindex(["Normal", "Known-Attack", "Zero-Day Candidate"], fill_value=0)
-                    .rename_axis("Label")
-                    .reset_index(name="Count")
-                )
-                st.dataframe(verdict_counts, width="stretch", hide_index=True)
-                if "ground_truth" in result_df.columns and result_df["ground_truth"].astype(str).str.len().any():
-                    gt_counts = (
-                        result_df["ground_truth"]
-                        .value_counts()
-                        .reindex(["Normal", "Known-Attack"], fill_value=0)
-                        .rename_axis("Ground Truth")
-                        .reset_index(name="Count")
-                    )
-                    comparable = result_df["correct_vs_ground_truth"].dropna()
-                    gt_acc = float(comparable.mean()) if len(comparable) else 0.0
-                    st.metric("Accuracy vs CSV Label", f"{gt_acc * 100:.2f}%")
-                    st.dataframe(gt_counts, width="stretch", hide_index=True)
+                render_bulk_detection_summary(result_df)
+                render_ground_truth_summary(result_df)
                 score_summary = st.session_state.get('bulk_score_summary')
                 if isinstance(score_summary, dict):
                     with st.expander("Kiem tra score va nguong phat hien", expanded=False):
@@ -1794,33 +1670,8 @@ elif page == "[4] Ask AI":
         st.stop()
 
     last = st.session_state['last_alert']
-    st.markdown(
-        f"""
-        <div class="soc-panel">
-            <span class="soc-badge soc-pill-blue">Context {last.get('alert_id', 'N/A')}</span>
-            <span class="soc-badge">{last.get('predicted_class', 'Unknown')}</span>
-            <span class="soc-badge">hybrid {float(last.get('hybrid_score', 0)):.3g}</span>
-            <span class="soc-badge">ae {float(last.get('ae_score', 0)):.3g}</span>
-            <div class="soc-detail-title" style="margin-top:10px;">Current AI Context</div>
-            <div class="soc-detail-value">{last.get('predicted_class', last.get('classifier_class', ''))}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # Goi y cau hoi
-    st.markdown("**Goi y cau hoi:**")
-    suggestions = [
-        "Tai sao alert nay bi danh dau la nguy hiem?",
-        "MITRE technique nao lien quan nhat?",
-        "Buoc xu ly khan cap la gi?",
-        "Day co the la false positive khong?",
-        "Giai thich feature bat thuong nhat cho toi hieu",
-    ]
-    cols = st.columns(len(suggestions))
-    for i, (col, q) in enumerate(zip(cols, suggestions, strict=True)):
-        if col.button(q[:25]+"...", key=f"sug_{i}"):
-            st.session_state['pending_question'] = q
+    render_ai_context_card(last)
+    render_question_suggestions()
 
     st.markdown("---")
 
@@ -1928,18 +1779,12 @@ cd dashboard
 streamlit run app.py
     """, language="bash")
 
-    st.markdown("### Trang thai hien tai:")
-    status_items = {
-        f"Model file ({os.path.basename(MODEL_PATH)})": os.path.exists(MODEL_PATH),
-        f"Pipeline file ({os.path.basename(PIPE_PATH)})": os.path.exists(PIPE_PATH),
-        f"Data file ({os.path.basename(DATA_PATH)})": os.path.exists(DATA_PATH),
-        f"Alert DB ({os.path.basename(ALERT_DB_PATH)})": os.path.exists(ALERT_DB_PATH),
-        "API Key (Bat ky trong .env)": any([os.getenv("GROQ_API_KEY"), os.getenv("GEMINI_API_KEY"), os.getenv("OPENAI_API_KEY"), os.getenv("ANTHROPIC_API_KEY")]),
-        "Module explainer.py": HAS_EXPLAINER,
-        "Module mitre_mapper.py": HAS_MITRE,
-        "Module llm_agent.py": HAS_LLM,
-    }
-    for item, ok in status_items.items():
-        icon = "OK" if ok else "MISSING"
-        color = "green" if ok else "red"
-        st.markdown(f":{color}[{icon}] {item}")
+    render_setup_status(
+        MODEL_PATH,
+        PIPE_PATH,
+        DATA_PATH,
+        ALERT_DB_PATH,
+        HAS_EXPLAINER,
+        HAS_MITRE,
+        HAS_LLM,
+    )

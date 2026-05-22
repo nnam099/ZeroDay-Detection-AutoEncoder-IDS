@@ -13,3 +13,4 @@ data/*
 *.db
 *.db-wal
 *.db-shm
+results/*.log

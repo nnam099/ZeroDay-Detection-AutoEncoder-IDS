@@ -17,6 +17,9 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SRC_DIR = os.path.join(ROOT_DIR, "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
+DASHBOARD_DIR = os.path.join(ROOT_DIR, "dashboard")
+if DASHBOARD_DIR not in sys.path:
+    sys.path.insert(0, DASHBOARD_DIR)
 
 
 class CoreSmokeTests(unittest.TestCase):
@@ -730,6 +733,82 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertIn("Source IP: 10.0.0.5", source_incident["recommended_focus"])
         self.assertTrue(all(item["end_time"] <= "2026-05-14 10:15:00" for item in incidents))
 
+    def test_dashboard_view_helpers_are_testable(self):
+        from ui_safety import attach_report_safety_note
+        from views_queue import build_history_dataframe, queue_summary
+
+        alerts = [
+            {
+                "alert_id": "A1",
+                "timestamp": "2026-05-14 10:00:00",
+                "status": "new",
+                "source": "single",
+                "llm_severity": "HIGH",
+                "predicted_class": "Zero-Day Candidate",
+                "classifier_class": "DoS",
+                "hybrid_score": 0.9,
+                "ae_score": 0.8,
+                "is_zeroday": True,
+            },
+            {
+                "alert_id": "A2",
+                "timestamp": "2026-05-14 10:01:00",
+                "status": "closed",
+                "source": "single",
+                "llm_severity": "LOW",
+                "predicted_class": "Normal",
+                "classifier_class": "Normal",
+                "hybrid_score": 0.1,
+                "ae_score": 0.1,
+                "is_zeroday": False,
+            },
+        ]
+
+        summary = queue_summary(alerts)
+        self.assertEqual(summary["alerts"], 2)
+        self.assertEqual(summary["critical_high"], 1)
+        self.assertEqual(summary["ood"], 1)
+        self.assertGreater(summary["average_risk"], 0)
+
+        df = build_history_dataframe(alerts)
+        self.assertEqual(df.iloc[0]["Alert ID"], "A1")
+        self.assertEqual(df.iloc[0]["OOD Candidate"], "YES")
+
+        report = attach_report_safety_note({"alert_id": "A1"})
+        self.assertIn("limitations_and_safety", report)
+        self.assertIn("zero_day_candidate_meaning", report["limitations_and_safety"])
+
+    def test_batch_evaluator_reports_labeled_metrics(self):
+        from batch_evaluator import summarize_scores
+
+        scores = pd.DataFrame({
+            "predicted_class": ["Normal", "Known-Attack", "Zero-Day Candidate", "Known-Attack"],
+            "classifier_class": ["Normal", "DoS", "Normal", "Exploits"],
+            "is_zeroday": [False, False, True, False],
+            "hybrid": [0.1, 0.7, 0.8, 0.6],
+            "ae_re": [0.1, 0.5, 0.9, 0.4],
+            "softmax": [0.05, 0.3, 0.7, 0.2],
+            "max_prob": [0.95, 0.7, 0.3, 0.8],
+        })
+        raw = pd.DataFrame({"attack_cat": ["Normal", "DoS", "Shellcode", "DoS"]})
+
+        summary = summarize_scores(
+            scores,
+            raw_df=raw,
+            label_col="attack_cat",
+            class_names=["Normal", "DoS", "Exploits"],
+            zero_day_labels=["Shellcode"],
+            thresholds={"hybrid": 0.5, "ae_re": 0.4, "hybrid_meta": {"type": "logistic_regression"}},
+        )
+
+        self.assertEqual(summary["accuracy"], 1.0)
+        self.assertEqual(summary["false_positive_rate"], 0.0)
+        self.assertEqual(summary["ood_detection_rate"], 1.0)
+        self.assertEqual(summary["recall_per_class"]["Normal"]["recall"], 1.0)
+        self.assertEqual(summary["recall_per_class"]["DoS"]["recall"], 0.5)
+        self.assertEqual(summary["threshold_profile"]["hybrid"], 0.5)
+        self.assertEqual(summary["threshold_profile"]["hybrid_meta"]["type"], "logistic_regression")
+
     def test_zero_day_vote_decision_requires_multiple_signals(self):
         from inference_runtime import zero_day_decision
 
@@ -896,6 +975,20 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertEqual(tuple(logits.shape), (2, checkpoint["n_classes"]))
         self.assertEqual(features.shape[0], 2)
         self.assertEqual(tuple(ae_score.shape), (2,))
+
+    def test_v15_artifacts_load_when_present(self):
+        model_path = os.path.join(ROOT_DIR, "checkpoints", "ids_v15_model.pth")
+        pipeline_path = os.path.join(ROOT_DIR, "checkpoints", "ids_v15_pipeline.pkl")
+        if not (os.path.exists(model_path) and os.path.exists(pipeline_path)):
+            self.skipTest("v15 checkpoint/pipeline artifacts are not present")
+
+        from batch_evaluator import load_ids_artifacts
+
+        artifacts = load_ids_artifacts(model_path, pipeline_path, "v15")
+
+        self.assertEqual(artifacts.checkpoint["n_features"], len(artifacts.feature_names))
+        self.assertEqual(artifacts.checkpoint["n_classes"], len(artifacts.class_names))
+        self.assertTrue(artifacts.thresholds)
 
     def test_ids_model_forward_shapes(self):
         from ids.models import IDSModel
