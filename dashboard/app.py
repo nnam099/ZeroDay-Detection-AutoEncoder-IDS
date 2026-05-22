@@ -388,11 +388,13 @@ from dashboard_runtime import (
     preprocess_dashboard_df as runtime_preprocess_dashboard_df,
     triage_alert_with_fallback as runtime_triage_alert_with_fallback,
 )
-from ui_safety import attach_report_safety_note, render_safety_notice
+from ui_safety import render_safety_notice
 from views_ai import render_ai_context_card, render_question_suggestions
 from views_analysis import render_analysis_safety_notice
 from views_batch import render_batch_safety_notice, render_bulk_detection_summary, render_ground_truth_summary
+from views_ood import build_feature_table, build_score_table, enrich_ood_row
 from views_queue import queue_summary, render_queue_view
+from views_report import render_raw_report, render_report_download
 from views_setup import render_setup_status
 from alert_store import (
     init_alert_store,
@@ -1044,21 +1046,10 @@ def display_result(result: dict, llm: dict):
         st.markdown("**Analyst Response Checklist**")
         for i, action in enumerate(actions, 1):
             st.checkbox(f"{i}. {action}", key=f"act_{result['alert_id']}_{i}")
-        if st.button("Export JSON Report", key=f"export_{result['alert_id']}"):
-            report = attach_report_safety_note({**result, "llm_analysis": llm})
-            report.pop('shap_values', None)
-            report.pop('probs', None)
-            st.download_button(
-                "Download JSON",
-                data=json.dumps(report, ensure_ascii=False, indent=2, default=str),
-                file_name=f"alert_{result['alert_id']}.json",
-                mime="application/json"
-            )
+        render_report_download(result, llm, key=str(result["alert_id"]))
 
     with tab5:
-        report = attach_report_safety_note({**result, "llm_analysis": llm})
-        report.pop('shap_values', None)
-        st.json(report)
+        render_raw_report(result, llm)
 
     st.session_state['last_alert'] = result
     st.session_state['last_llm'] = llm
@@ -1536,14 +1527,9 @@ elif page == "[3] OOD Candidate Logs":
                     unsafe_allow_html=True,
                 )
             else:
-                row_scores = logs[logs["source_row"] == selected_source_row].iloc[0].to_dict()
-                row_scores["risk"] = risk_score({
-                    "hybrid_score": row_scores.get("hybrid_score", 0),
-                    "ae_score": row_scores.get("ae_score", 0),
-                    "is_zeroday": bool(row_scores.get("is_zeroday", False)),
-                }, "HIGH" if row_scores.get("is_zeroday") else "MEDIUM")
-                classifier_class = str(row_scores.get("classifier_class", row_scores.get("predicted_class", "Unknown")))
-                detection = str(row_scores.get("detection") or _traffic_verdict(row_scores.get("is_zeroday"), classifier_class))
+                row_scores = enrich_ood_row(logs[logs["source_row"] == selected_source_row].iloc[0].to_dict())
+                classifier_class = str(row_scores.get("classifier_class", "Unknown"))
+                detection = str(row_scores.get("detection", "Unknown"))
                 verdict_badge = "OOD CANDIDATE" if row_scores.get("is_zeroday") else "KNOWN"
                 badge_class = "soc-pill-red" if row_scores.get("is_zeroday") else "soc-pill-green"
 
@@ -1588,31 +1574,14 @@ elif page == "[3] OOD Candidate Logs":
                 with tabs[0]:
                     if isinstance(raw_df, pd.DataFrame) and selected_source_row < len(raw_df):
                         feature_row = raw_df.iloc[selected_source_row]
-                        feature_table = pd.DataFrame({
-                            "Feature": feature_row.index.astype(str),
-                            "Value": feature_row.astype(str).values,
-                        })
-                        priority = feature_table["Feature"].isin([
-                            "true_label", "attack_cat", "label", "dur", "sbytes", "dbytes",
-                            "sload", "dload", "spkts", "dpkts", "ct_srv_dst", "ct_dst_ltm",
-                            "ct_src_ltm", "state_num", "proto_num", "service_num",
-                        ])
-                        feature_table = pd.concat([feature_table[priority], feature_table[~priority]], ignore_index=True)
                         search = st.text_input("Search feature", "")
-                        if search:
-                            feature_table = feature_table[
-                                feature_table["Feature"].str.contains(search, case=False, na=False)
-                            ]
+                        feature_table = build_feature_table(feature_row, search)
                         st.dataframe(feature_table, width="stretch", hide_index=True, height=430)
                     else:
                         st.warning("Khong tim thay raw feature row tu batch upload.")
 
                 with tabs[1]:
-                    score_table = pd.DataFrame([
-                        {"Metric": k, "Value": v}
-                        for k, v in row_scores.items()
-                        if k != "source_row"
-                    ])
+                    score_table = build_score_table(row_scores)
                     st.dataframe(score_table, width="stretch", hide_index=True, height=360)
 
                 with tabs[2]:

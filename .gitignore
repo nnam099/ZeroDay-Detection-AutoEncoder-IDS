@@ -14,3 +14,4 @@ data/*
 *.db-wal
 *.db-shm
 results/*.log
+results/csv_eval/

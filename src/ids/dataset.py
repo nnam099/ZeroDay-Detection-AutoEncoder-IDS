@@ -295,12 +295,15 @@ class FlowDS(Dataset):
 
 
 def make_loaders(splits, batch_size=512, num_workers=2,
-                 dos_class_idx=None, dos_over=5.0, seed=42):
-    y_tr    = splits['y_train']
+                 dos_class_idx=None, dos_over=5.0, class_sample_weights=None,
+                 seed=42):
+    y_tr    = np.asarray(splits['y_train'])
     freq    = np.bincount(y_tr)
     weights = 1.0 / freq[y_tr].astype(np.float32)
     if dos_class_idx is not None:
         weights[y_tr == dos_class_idx] *= dos_over
+    for class_idx, multiplier in (class_sample_weights or {}).items():
+        weights[y_tr == int(class_idx)] *= float(multiplier)
 
     tr_ds = FlowDS(splits['X_train'], y_tr)
     va_ds = FlowDS(splits['X_val'],   splits['y_val'])

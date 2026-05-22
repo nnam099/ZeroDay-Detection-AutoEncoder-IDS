@@ -1,4 +1,23 @@
 {
+  "calibrated_threshold_evaluation": {
+    "decision_rule": "vote_2_of_3",
+    "normal_false_positive_rate": 0.046964,
+    "ood_detection_rate": 0.055392,
+    "profile_path": "D:\\K\u00ec 2 N\u0103m 3\\Th\u1ef1c T\u1eadp C\u01a1 S\u1edf\\AI_Train\\ZeroDay-Detection-AutoEncoder-IDS\\checkpoints\\local_thresholds.json",
+    "reference_rows": 56000,
+    "target_fpr": 0.05,
+    "thresholds": {
+      "ae_re": 1.7397907793521863,
+      "decision_mode": "vote",
+      "fv_cluster": 0.6231321513652801,
+      "hybrid": 0.9462801158428191,
+      "min_votes": 2,
+      "softmax": 0.4452653408050537
+    },
+    "tradeoff_note": "Lower FPR can reduce OOD recall; validate the chosen target_fpr against analyst capacity.",
+    "zero_day_count": 5688,
+    "zero_day_rate": 0.03244
+  },
   "input_csv": "D:\\K\u00ec 2 N\u0103m 3\\Th\u1ef1c T\u1eadp C\u01a1 S\u1edf\\AI_Train\\ZeroDay-Detection-AutoEncoder-IDS\\data\\UNSW_NB15_testing-set.csv",
   "known_cats": [
     "Normal",
@@ -227,7 +246,7 @@
     "hybrid": 0.4659219980239868,
     "softmax": 0.44672542810440063
   },
-  "updated_at": "2026-05-22T14:42:54Z",
+  "updated_at": "2026-05-22T14:53:52Z",
   "version": "v14.0",
   "zd_cats": [
     "Fuzzers",

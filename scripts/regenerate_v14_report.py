@@ -16,6 +16,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from batch_evaluator import load_ids_artifacts, preprocess_raw_df, run_batch_scores, summarize_scores  # noqa: E402
+from inference_runtime import ground_truth_verdict, zero_day_decision  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -28,6 +29,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--plots-dir", default=str(ROOT_DIR / "plots"))
     parser.add_argument("--scores-csv", default=None)
     parser.add_argument("--max-rows", type=int, default=None)
+    parser.add_argument(
+        "--calibrated-threshold-profile",
+        default=str(ROOT_DIR / "checkpoints" / "local_thresholds.json"),
+        help="Optional local threshold profile to evaluate as a what-if scenario.",
+    )
     return parser.parse_args()
 
 
@@ -49,6 +55,13 @@ def main() -> int:
         zero_day_labels=list(artifacts.pipeline.get("zd_cats", [])),
         thresholds=artifacts.thresholds,
     )
+    calibrated = calibrated_threshold_summary(
+        scores,
+        raw_df,
+        label_col=args.label_col,
+        profile_path=args.calibrated_threshold_profile,
+        zero_day_labels=list(artifacts.pipeline.get("zd_cats", [])),
+    )
     plots = write_evaluation_plots(scores, summary, plots_dir)
 
     if args.scores_csv:
@@ -67,6 +80,7 @@ def main() -> int:
         "known_cats": list(artifacts.pipeline.get("known_cats", [])),
         "zd_cats": list(artifacts.pipeline.get("zd_cats", [])),
         "metrics": summary,
+        "calibrated_threshold_evaluation": calibrated,
         "normalization_report": normalization_report,
         "threshold_profile": summary.get("threshold_profile", {}),
         "plots": plots,
@@ -84,6 +98,9 @@ def main() -> int:
     print(f"Accuracy: {summary.get('accuracy')}")
     print(f"Normal FPR: {summary.get('false_positive_rate')}")
     print(f"OOD detection rate: {summary.get('ood_detection_rate')}")
+    if calibrated:
+        print(f"Calibrated normal FPR: {calibrated.get('normal_false_positive_rate')}")
+        print(f"Calibrated OOD detection rate: {calibrated.get('ood_detection_rate')}")
     return 0
 
 
@@ -133,6 +150,47 @@ def write_evaluation_plots(scores: pd.DataFrame, summary: dict, plots_dir: Path)
         paths.append(str(path))
 
     return paths
+
+
+def calibrated_threshold_summary(
+    scores: pd.DataFrame,
+    raw_df: pd.DataFrame,
+    label_col: str,
+    profile_path: str | None,
+    zero_day_labels: list[str],
+) -> dict | None:
+    if not profile_path or not Path(profile_path).exists():
+        return None
+    with open(profile_path, encoding="utf-8") as handle:
+        profile = json.load(handle)
+    thresholds = profile.get("thresholds", {})
+    if not thresholds:
+        return None
+    decisions, rule = zero_day_decision(
+        scores["ae_re"].values,
+        scores["max_prob"].values,
+        scores["hybrid"].values,
+        thresholds=thresholds,
+    )
+    decisions = pd.Series(decisions.astype(bool), index=scores.index)
+    truth = raw_df[label_col].map(ground_truth_verdict) if label_col in raw_df.columns else pd.Series([], dtype=str)
+    labels = raw_df[label_col].astype(str) if label_col in raw_df.columns else pd.Series([], dtype=str)
+    normal_mask = truth == "Normal"
+    zd_mask = labels.isin(set(zero_day_labels))
+    return {
+        "profile_path": str(Path(profile_path).resolve()),
+        "target_fpr": profile.get("target_fpr"),
+        "reference_rows": profile.get("reference_rows"),
+        "decision_rule": rule,
+        "zero_day_count": int(decisions.sum()),
+        "zero_day_rate": round(float(decisions.mean()), 6),
+        "normal_false_positive_rate": round(float(decisions.loc[normal_mask.values].mean()), 6)
+        if bool(normal_mask.any()) else None,
+        "ood_detection_rate": round(float(decisions.loc[zd_mask.values].mean()), 6)
+        if bool(zd_mask.any()) else None,
+        "thresholds": thresholds,
+        "tradeoff_note": "Lower FPR can reduce OOD recall; validate the chosen target_fpr against analyst capacity.",
+    }
 
 
 if __name__ == "__main__":

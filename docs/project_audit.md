@@ -7,7 +7,7 @@ Updated: 2026-05-22
 - `scripts/smoke_check.py` now runs with UTF-8 subprocess settings, so it works on Windows paths containing Vietnamese characters.
 - `scripts/check_environment.py` now configures UTF-8 console output before printing JSON, so direct execution works from Windows paths containing Vietnamese characters.
 - Python compile passes for `src/`, `dashboard/`, `export_model.py`, `patch_checkpoint.py` and `tests/`.
-- Smoke tests pass locally: 53 tests, with the v15 artifact smoke test skipped until v15 artifacts exist.
+- Smoke tests pass locally: 54 tests, with the v15 artifact smoke test skipped until v15 artifacts exist.
 - Checkpoint `ids_v14_model.pth` loads into `IDSModel` v14 without missing or unexpected weights.
 - Pipeline v14 has 61 features and matches `n_features` in the checkpoint.
 - `log_normalizer.py` maps common firewall/flow CSV columns into an UNSW-like flow schema.
@@ -22,6 +22,8 @@ Updated: 2026-05-22
 - Dashboard UI rendering has started moving into smaller modules: queue view, alert-analysis safety, batch upload summaries, Ask AI helpers, setup status and shared safety/report copy.
 - `scripts/regenerate_v14_report.py` regenerates artifact evaluation metrics and plots from current saved v14 artifacts without retraining.
 - `results/ids_v14_results.json` now includes detection accuracy, known-class recall, OOD detection rate, normal false-positive rate and threshold profile for `UNSW_NB15_testing-set.csv`.
+- A local `target_fpr=0.05` threshold profile was generated at `checkpoints/local_thresholds.json`; when applied as a what-if, normal FPR drops from about 40.49% to about 4.70%, while OOD detection drops to about 5.54%.
+- v14 training now supports class-specific sampler/loss weight overrides, with defaults focused on the currently weak `Exploits` and `Reconnaissance` classes.
 - v14 training now reduces DoS focal over-weighting and explicitly penalizes Recon/DoS cross-confusion in focal and contrastive objectives.
 - v14 hybrid anomaly scoring now fits a validation meta-learner from `ae_re` and classifier uncertainty, and the weak energy OOD comparator is removed from v14 reports.
 - v14 can optionally adapt the AE reconstruction threshold from recent normal traffic and plot threshold drift over the test timeline.
@@ -56,15 +58,15 @@ Updated: 2026-05-22
 
 - `dashboard/app.py` is still a large orchestration file. Major queue rendering and several UI helper areas have been split out, but single-alert investigation and OOD log detail can still be modularized further.
 - Some code comments/docstrings still contain mojibake or ASCII-only Vietnamese text from earlier encoding issues.
-- v14 artifact evaluation has been regenerated, but the normal false-positive rate is high, so threshold recalibration or retraining is needed before presenting it as operationally precise.
+- v14 artifact evaluation has been regenerated. The active artifact thresholds have high normal FPR; the local calibrated profile reduces FPR substantially but also reduces OOD recall, so threshold choice must be tied to analyst capacity and demo goals.
 - v15 is experimental. The dashboard can select it, but stable v15 use requires separately trained/exported artifacts. The v15 smoke test is present and skipped until artifacts are available.
 - LLM provider packages remain optional and are not installed unless the selected provider is needed.
 - Pretrained artifacts are not yet published as a release/model-registry asset; users must train locally or receive artifacts out of band.
 
 ## Next Priorities
 
-1. Recalibrate thresholds or retrain v14 to reduce the high normal false-positive rate shown in the regenerated artifact report.
-2. Continue splitting `dashboard/app.py`, especially single-alert investigation and OOD log detail pages.
-3. Publish trusted v14 demo artifacts as release assets or an external model artifact bundle.
-4. Fix remaining mojibake in source comments/docstrings that are used in reports or presentations.
+1. Retrain v14 with the new class-specific weights and compare recall for `Exploits` and `Reconnaissance`.
+2. Decide whether the local `target_fpr=0.05` threshold profile is appropriate for the demo, or calibrate another profile.
+3. Continue splitting `dashboard/app.py`, especially single-alert investigation and OOD log detail pages.
+4. Publish trusted v14 demo artifacts as release assets or an external model artifact bundle.
 5. Train/export v15 artifacts if v15 will be demonstrated, then enable the existing v15 artifact smoke test.

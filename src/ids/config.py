@@ -24,6 +24,9 @@ class CFG:
     lambda_con: float = 0.3
     focal_gamma: float = 2.0
     dos_weight: float = 3.0
+    dos_sampler_weight: float = 1.5
+    class_loss_weights: str = "Exploits=3.0,Reconnaissance=3.0"
+    class_sampler_weights: str = "Exploits=4.0,Reconnaissance=4.0"
     recon_dos_penalty: float = 2.0
 
     # Zero-day

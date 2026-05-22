@@ -73,6 +73,33 @@ def save_artifacts(model, splits, thresholds, history, centroids, save_dir, hybr
     return pth_path, pkl_path
 
 
+def parse_class_weight_overrides(value, label_names):
+    """Parse Class=weight pairs into label-encoder indices."""
+    if not value:
+        return {}
+    if isinstance(value, dict):
+        items = value.items()
+    else:
+        items = []
+        for part in str(value).split(','):
+            part = part.strip()
+            if not part:
+                continue
+            if '=' not in part:
+                raise ValueError(f'class weight override must use Class=weight format: {part}')
+            name, weight = part.split('=', 1)
+            items.append((name.strip(), weight.strip()))
+
+    index_by_name = {str(name): idx for idx, name in enumerate(label_names)}
+    overrides = {}
+    for name, weight in items:
+        if str(name) not in index_by_name:
+            print(f'  [WARN] Ignoring class weight override for unknown class: {name}')
+            continue
+        overrides[index_by_name[str(name)]] = float(weight)
+    return overrides
+
+
 # ═══════════════════════════════════════════════════════════════
 # MAIN PIPELINE
 # ═══════════════════════════════════════════════════════════════
@@ -102,11 +129,25 @@ def run_full(args):
         dos_idx = int(le.transform(['DoS'])[0])
     if 'Reconnaissance' in label_names:
         recon_idx = int(le.transform(['Reconnaissance'])[0])
+    class_loss_overrides = parse_class_weight_overrides(
+        getattr(args, 'class_loss_weights', ''),
+        label_names,
+    )
+    class_sampler_overrides = parse_class_weight_overrides(
+        getattr(args, 'class_sampler_weights', ''),
+        label_names,
+    )
+    if class_loss_overrides:
+        print(f'\n  Class loss weight overrides: {class_loss_overrides}')
+    if class_sampler_overrides:
+        print(f'  Class sampler weight overrides: {class_sampler_overrides}')
 
     print('\n[3/8] Creating loaders...')
     loaders = make_loaders(splits, batch_size=args.batch_size,
                            num_workers=args.num_workers,
-                           dos_class_idx=dos_idx, dos_over=5.0,
+                           dos_class_idx=dos_idx,
+                           dos_over=getattr(args, 'dos_sampler_weight', 1.5),
+                           class_sample_weights=class_sampler_overrides,
                            seed=args.seed)
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -121,6 +162,7 @@ def run_full(args):
         focal_gamma=args.focal_gamma,  dos_class_idx=dos_idx,
         dos_weight=args.dos_weight,    recon_class_idx=recon_idx,
         recon_dos_penalty=getattr(args, 'recon_dos_penalty', 2.0),
+        class_weight_overrides=class_loss_overrides,
         n_features=splits['n_features'],
         device=device,
     )

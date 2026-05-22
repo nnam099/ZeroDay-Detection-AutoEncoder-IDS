@@ -157,6 +157,47 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertTrue(cfg.demo)
         self.assertEqual(cfg.seed, 123)
 
+    def test_train_class_weight_overrides_target_weak_classes(self):
+        from ids.dataset import make_loaders
+        from ids.losses import IDSLoss
+        from train import parse_class_weight_overrides
+
+        labels = ["Normal", "DoS", "Exploits", "Reconnaissance", "Generic"]
+        overrides = parse_class_weight_overrides("Exploits=3.0,Reconnaissance=4.0", labels)
+
+        self.assertEqual(overrides, {2: 3.0, 3: 4.0})
+
+        criterion = IDSLoss(
+            n_classes=5,
+            dos_class_idx=1,
+            dos_weight=1.5,
+            class_weight_overrides=overrides,
+        )
+        weights = criterion.focal.w.detach().cpu().numpy()
+        self.assertGreater(weights[2], weights[1])
+        self.assertGreater(weights[3], weights[2])
+
+        splits = {
+            "X_train": [[0.0], [1.0], [2.0], [3.0]],
+            "y_train": [0, 1, 2, 3],
+            "X_val": [[0.0]],
+            "y_val": [0],
+            "X_test": [[0.0]],
+            "y_test": [0],
+        }
+        loaders = make_loaders(
+            splits,
+            batch_size=2,
+            num_workers=0,
+            dos_class_idx=1,
+            dos_over=1.5,
+            class_sample_weights=overrides,
+            seed=7,
+        )
+        sampler_weights = loaders["train"].sampler.weights.detach().cpu().numpy()
+        self.assertGreater(sampler_weights[2], sampler_weights[1])
+        self.assertGreater(sampler_weights[3], sampler_weights[2])
+
     def test_environment_check_does_not_expose_secret_values(self):
         from scripts.check_environment import assess_readiness, collect_environment
 
@@ -735,7 +776,9 @@ class CoreSmokeTests(unittest.TestCase):
 
     def test_dashboard_view_helpers_are_testable(self):
         from ui_safety import attach_report_safety_note
+        from views_ood import build_feature_table, build_score_table, enrich_ood_row
         from views_queue import build_history_dataframe, queue_summary
+        from views_report import build_export_report
 
         alerts = [
             {
@@ -777,6 +820,19 @@ class CoreSmokeTests(unittest.TestCase):
         report = attach_report_safety_note({"alert_id": "A1"})
         self.assertIn("limitations_and_safety", report)
         self.assertIn("zero_day_candidate_meaning", report["limitations_and_safety"])
+
+        export = build_export_report({"alert_id": "A1", "shap_values": [1], "probs": [0.5]}, {"severity": "HIGH"})
+        self.assertNotIn("shap_values", export)
+        self.assertNotIn("probs", export)
+        self.assertEqual(export["llm_analysis"]["severity"], "HIGH")
+
+        ood_row = enrich_ood_row({"source_row": 5, "hybrid_score": 0.9, "ae_score": 0.8, "is_zeroday": True})
+        self.assertEqual(ood_row["detection"], "Zero-Day Candidate")
+        self.assertGreater(ood_row["risk"], 80)
+        feature_table = build_feature_table(pd.Series({"dur": 1.2, "zzz": "tail"}), search="dur")
+        self.assertEqual(feature_table["Feature"].tolist(), ["dur"])
+        score_table = build_score_table({"source_row": 5, "hybrid_score": 0.9})
+        self.assertEqual(score_table["Metric"].tolist(), ["hybrid_score"])
 
     def test_batch_evaluator_reports_labeled_metrics(self):
         from batch_evaluator import summarize_scores

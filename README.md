@@ -22,7 +22,7 @@ Main flow:
 
 - v14 is the operational default because local artifacts exist in `checkpoints/`.
 - Runtime dependencies are pinned in `requirements.txt`; smoke-check dependency ranges are in `requirements-smoke.txt`; developer tooling is in `requirements-dev.txt`.
-- `scripts/smoke_check.py` passes locally with 53 tests, with the v15 artifact smoke test skipped until v15 artifacts exist.
+- `scripts/smoke_check.py` passes locally with 54 tests, with the v15 artifact smoke test skipped until v15 artifacts exist.
 - Smoke coverage includes artifact contract validation, threshold metadata validation, artifact manifest hashing, duplicate feature-name rejection, environment readiness checks, export config handling, checkpoint metadata patch logic, SQLite alert store persistence, CSV input guardrails, CSV normalization quality checks, dashboard preprocessing/context contracts, dashboard UI helper contracts, AI context selection, alert queue filtering, top-N batch alert selection, alert entity enrichment, lightweight correlation, time-window incident grouping, labeled evaluation reporting, API edge cases, Recon/DoS prototype separation, LLM fallback behavior, MITRE mapping and v14 artifact loading.
 - `llm_agent.py` lazy-loads provider clients, so importing dashboard code does not require an API key.
 - A Windows GitHub Actions smoke workflow is available at `.github/workflows/smoke.yml`.
@@ -68,7 +68,9 @@ dashboard/
   views_queue.py           # alert queue, correlation and incident-window UI
   views_analysis.py        # alert-analysis safety UI helpers
   views_batch.py           # CSV batch summary UI helpers
+  views_ood.py             # OOD candidate detail table helpers
   views_ai.py              # Ask AI context/suggestion UI helpers
+  views_report.py          # JSON report/export helpers
   views_setup.py           # setup/status UI helpers
   ui_safety.py             # shared limitations and report safety copy
 configs/
@@ -317,6 +319,17 @@ Train v14:
 python train.py --data_dir data/ --save_dir checkpoints/ --plot_dir plots/
 ```
 
+The default v14 training config now gives extra sampler/loss weight to the weak
+known classes observed in artifact evaluation (`Exploits` and
+`Reconnaissance`) while reducing the previous DoS sampler bias. Override these
+without code changes:
+
+```bash
+python train.py --class_loss_weights "Exploits=3.0,Reconnaissance=3.0" \
+  --class_sampler_weights "Exploits=4.0,Reconnaissance=4.0" \
+  --dos_sampler_weight 1.5
+```
+
 PowerShell launcher:
 
 ```powershell
@@ -422,6 +435,7 @@ This refreshes `results/ids_v14_results.json` and writes evaluation plots in `pl
 - `v14_eval_known_class_recall.png`
 
 The report includes detection accuracy, known-class recall, OOD detection rate, normal false-positive rate and the active threshold profile. A high false-positive rate means the current thresholds need recalibration before using the model for operational alerting.
+If `checkpoints/local_thresholds.json` exists, the report also includes a calibrated-threshold what-if section. With `target_fpr=0.05` on the current test CSV, the local vote profile reduces normal FPR to about `4.70%`, but OOD detection drops to about `5.54%`, so this is a precision/recall tradeoff rather than a free improvement.
 
 ## Evaluate and Calibrate CSV Drift
 
@@ -448,6 +462,15 @@ The dashboard automatically loads `checkpoints/local_thresholds.json` when it is
 present. Override with `IDS_THRESHOLD_PROFILE` if you want to test another
 profile. Local profiles use vote-based OOD candidate decisions by default, so a row
 must cross multiple calibrated signals instead of only the hybrid score.
+
+Current local calibration example:
+
+```powershell
+python scripts/evaluate_csv.py data\UNSW_NB15_testing-set.csv --label-col attack_cat --calibrate-thresholds --target-fpr 0.05
+python scripts/regenerate_v14_report.py --csv-path data\UNSW_NB15_testing-set.csv --label-col attack_cat
+```
+
+The dashboard loads `checkpoints/local_thresholds.json` automatically. Keep this file local unless you intentionally publish a calibrated deployment profile.
 
 ## Prepare Production Flow Data
 

@@ -23,6 +23,12 @@ from batch_evaluator import (  # noqa: E402
 )
 
 
+def configure_console_encoding() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate IDS zero-day behavior on a CSV file.")
     parser.add_argument("csv_path", help="Path to a UNSW/CICIDS/firewall/flow CSV file.")
@@ -43,6 +49,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    configure_console_encoding()
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
     stem = args.name or os.path.splitext(os.path.basename(args.csv_path))[0]
