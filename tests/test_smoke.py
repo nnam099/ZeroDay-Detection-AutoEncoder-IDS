@@ -119,6 +119,29 @@ class CoreSmokeTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
 
+    def test_artifact_validator_accepts_vote_threshold_controls(self):
+        from artifact_validator import validate_artifact_contract
+
+        scaler = RobustScaler().fit([[0, 1, 2], [3, 4, 5]])
+        label_encoder = LabelEncoder().fit(["Normal", "DoS"])
+        result = validate_artifact_contract(
+            {"model_state_dict": {}, "n_features": 3, "n_classes": 2},
+            {
+                "scaler": scaler,
+                "label_encoder": label_encoder,
+                "feature_names": ["dur", "sbytes", "dbytes"],
+                "thresholds": {
+                    "decision_mode": "vote",
+                    "min_votes": 2,
+                    "hybrid": 0.5,
+                    "ae_re": 0.8,
+                    "softmax": 0.4,
+                },
+            },
+        )
+
+        self.assertTrue(result.ok)
+
     def test_patch_checkpoint_infers_dims_from_state_dict(self):
         from patch_checkpoint import infer_dims
 

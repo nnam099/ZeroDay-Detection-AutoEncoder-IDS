@@ -52,7 +52,7 @@ def render_queue_view(
     )
     hist_df = build_history_dataframe(filtered_history)
     st.caption(f"Showing {len(filtered_history):,} of {len(history):,} persisted alerts")
-    st.dataframe(hist_df, width="stretch", hide_index=True)
+    st.dataframe(hist_df, use_container_width=True, hide_index=True)
 
     if hist_df.empty:
         st.info("No persisted alerts match the current filters.")
@@ -111,7 +111,7 @@ def render_correlation_tables(filtered_history: list[dict]) -> None:
             "Latest": item["latest_time"],
             "Sample Alert IDs": ", ".join(item["alert_ids"]),
         } for item in correlations[:25]])
-        st.dataframe(corr_df, width="stretch", hide_index=True)
+        st.dataframe(corr_df, use_container_width=True, hide_index=True)
 
     incidents = build_time_window_incidents(filtered_history, window_minutes=15, min_alerts=2)
     if incidents:
@@ -130,7 +130,7 @@ def render_correlation_tables(filtered_history: list[dict]) -> None:
             "Focus": item["recommended_focus"],
             "Sample Alert IDs": ", ".join(item["alert_ids"]),
         } for item in incidents[:25]])
-        st.dataframe(incident_df, width="stretch", hide_index=True)
+        st.dataframe(incident_df, use_container_width=True, hide_index=True)
 
 
 def render_alert_disposition(

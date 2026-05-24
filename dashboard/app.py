@@ -993,7 +993,7 @@ def display_result(result: dict, llm: dict):
             "Probability": [round(p, 4) for p in result['probs']]
         })
         st.markdown("**Class Probabilities**")
-        st.dataframe(prob_df.sort_values("Probability", ascending=False), width="stretch", hide_index=True)
+        st.dataframe(prob_df.sort_values("Probability", ascending=False), use_container_width=True, hide_index=True)
         st.bar_chart(prob_df.set_index("Class"))
 
         feats = result.get('top_features', [])
@@ -1002,7 +1002,7 @@ def display_result(result: dict, llm: dict):
             df_shap["SHAP Value"] = df_shap["SHAP Value"].round(4)
             df_shap["Actual Value"] = df_shap["Actual Value"].round(4)
             df_shap["Direction"] = df_shap["SHAP Value"].apply(lambda x: "Tang nguy co" if x > 0 else "Giam nguy co")
-            st.dataframe(df_shap, width="stretch", hide_index=True)
+            st.dataframe(df_shap, use_container_width=True, hide_index=True)
             st.bar_chart(df_shap.set_index("Feature")["SHAP Value"])
         else:
             st.write(result.get('shap_summary', 'SHAP chua chay'))
@@ -1025,14 +1025,14 @@ def display_result(result: dict, llm: dict):
                     "Evidence": ", ".join(t.get('evidence', [])),
                     "ATT&CK": t.get('url', f"https://attack.mitre.org/techniques/{t['id']}/"),
                 } for t in techniques])
-                st.dataframe(mitre_df, width="stretch", hide_index=True)
+                st.dataframe(mitre_df, use_container_width=True, hide_index=True)
                 checks = []
                 for t in techniques:
                     for action in t.get("response_actions", []):
                         checks.append({"Technique": t["id"], "Check": action})
                 if checks:
                     st.markdown("**Recommended MITRE-driven checks**")
-                    st.dataframe(pd.DataFrame(checks), width="stretch", hide_index=True)
+                    st.dataframe(pd.DataFrame(checks), use_container_width=True, hide_index=True)
             st.caption(mitre.get("coverage_note", ""))
         else:
             st.write(result.get('mitre_summary', 'MITRE chua chay'))
@@ -1259,7 +1259,7 @@ elif page == "[2] Analyze Alert":
                     )
                 st.dataframe(
                     raw_df.head(preview_rows),
-                    width="stretch",
+                    use_container_width=True,
                     hide_index=True,
                     height=560,
                 )
@@ -1375,16 +1375,19 @@ elif page == "[2] Analyze Alert":
                     pass
 
                 max_rows = min(1000, len(result_df))
-                rows_to_show = st.slider(
-                    "So dong muon xem",
-                    min_value=10,
-                    max_value=max_rows,
-                    value=min(100, max_rows),
-                    step=10,
-                )
+                if max_rows <= 10:
+                    rows_to_show = max_rows
+                else:
+                    rows_to_show = st.slider(
+                        "So dong muon xem",
+                        min_value=10,
+                        max_value=max_rows,
+                        value=min(100, max_rows),
+                        step=10,
+                    )
                 st.dataframe(
                     result_df.head(rows_to_show),
-                    width="stretch",
+                    use_container_width=True,
                     hide_index=True,
                     height=620,
                 )
@@ -1485,7 +1488,7 @@ elif page == "[3] OOD Candidate Logs":
                 try:
                     event = st.dataframe(
                         view_df[display_cols],
-                        width="stretch",
+                        use_container_width=True,
                         hide_index=True,
                         selection_mode="single-row",
                         on_select="rerun",
@@ -1494,7 +1497,7 @@ elif page == "[3] OOD Candidate Logs":
                     if selected_rows:
                         selected_source_row = int(view_df.iloc[selected_rows[0]]["source_row"])
                 except TypeError:
-                    st.dataframe(view_df[display_cols], width="stretch", hide_index=True)
+                    st.dataframe(view_df[display_cols], use_container_width=True, hide_index=True)
 
                 if selected_source_row is None:
                     labels = []
@@ -1576,13 +1579,13 @@ elif page == "[3] OOD Candidate Logs":
                         feature_row = raw_df.iloc[selected_source_row]
                         search = st.text_input("Search feature", "")
                         feature_table = build_feature_table(feature_row, search)
-                        st.dataframe(feature_table, width="stretch", hide_index=True, height=430)
+                        st.dataframe(feature_table, use_container_width=True, hide_index=True, height=430)
                     else:
                         st.warning("Khong tim thay raw feature row tu batch upload.")
 
                 with tabs[1]:
                     score_table = build_score_table(row_scores)
-                    st.dataframe(score_table, width="stretch", hide_index=True, height=360)
+                    st.dataframe(score_table, use_container_width=True, hide_index=True, height=360)
 
                 with tabs[2]:
                     if HAS_MITRE:
@@ -1604,7 +1607,7 @@ elif page == "[3] OOD Candidate Logs":
                                 "Confidence": t.get("confidence", ""),
                                 "Rationale": t.get("rationale", ""),
                                 "ATT&CK": t.get("url", ""),
-                            } for t in techniques]), width="stretch", hide_index=True)
+                            } for t in techniques]), use_container_width=True, hide_index=True)
                         st.caption(mitre_res.get("coverage_note", ""))
                     else:
                         st.warning("MITRE module chua duoc kich hoat.")

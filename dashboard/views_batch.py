@@ -25,7 +25,7 @@ def render_bulk_detection_summary(result_df: pd.DataFrame) -> None:
         .rename_axis("Label")
         .reset_index(name="Count")
     )
-    st.dataframe(verdict_counts, width="stretch", hide_index=True)
+    st.dataframe(verdict_counts, use_container_width=True, hide_index=True)
 
 
 def render_ground_truth_summary(result_df: pd.DataFrame) -> None:
@@ -41,4 +41,4 @@ def render_ground_truth_summary(result_df: pd.DataFrame) -> None:
     comparable = result_df["correct_vs_ground_truth"].dropna()
     gt_acc = float(comparable.mean()) if len(comparable) else 0.0
     st.metric("Accuracy vs CSV Label", f"{gt_acc * 100:.2f}%")
-    st.dataframe(gt_counts, width="stretch", hide_index=True)
+    st.dataframe(gt_counts, use_container_width=True, hide_index=True)

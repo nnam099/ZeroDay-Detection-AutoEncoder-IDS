@@ -1,13 +1,13 @@
 # Project Audit
 
-Updated: 2026-05-22
+Updated: 2026-05-24
 
 ## Verified
 
 - `scripts/smoke_check.py` now runs with UTF-8 subprocess settings, so it works on Windows paths containing Vietnamese characters.
 - `scripts/check_environment.py` now configures UTF-8 console output before printing JSON, so direct execution works from Windows paths containing Vietnamese characters.
 - Python compile passes for `src/`, `dashboard/`, `export_model.py`, `patch_checkpoint.py` and `tests/`.
-- Smoke tests pass locally: 54 tests, with the v15 artifact smoke test skipped until v15 artifacts exist.
+- Smoke tests pass locally: 55 tests, with the v15 artifact smoke test skipped until v15 artifacts exist.
 - Checkpoint `ids_v14_model.pth` loads into `IDSModel` v14 without missing or unexpected weights.
 - Pipeline v14 has 61 features and matches `n_features` in the checkpoint.
 - `log_normalizer.py` maps common firewall/flow CSV columns into an UNSW-like flow schema.
@@ -30,7 +30,9 @@ Updated: 2026-05-22
 - v14 training code is split into `src/ids/` modules with a `train.py` entry point while retaining the legacy `ids_v14_unswnb15.py` wrapper.
 - `llm_agent.py` no longer initializes the provider client on import; it initializes lazily when LLM output is requested.
 - `patch_checkpoint.py` now validates checkpoint structure, accepts a path argument and creates a backup by default.
-- `artifact_validator.py` rejects duplicate/empty feature names and invalid threshold metadata.
+- `artifact_validator.py` rejects duplicate/empty feature names and invalid threshold metadata while accepting vote-mode threshold controls such as `decision_mode` and `min_votes`.
+- Dashboard dataframe rendering now uses `use_container_width=True` for compatibility with the pinned Streamlit runtime.
+- Dashboard batch-result preview handles very small CSV batches without creating an invalid slider range.
 - `export_model.py` now exposes a CLI instead of hard-coding `data/quick_train`.
 - PowerShell train launchers are available for v14 and v15.
 - CI uses `requirements-smoke.txt` so optional dashboard/explainability packages do not slow down core smoke checks.

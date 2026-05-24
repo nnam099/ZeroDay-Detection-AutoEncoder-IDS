@@ -96,8 +96,9 @@ def validate_artifact_contract(checkpoint: dict[str, Any], pipeline: dict[str, A
             "fv_cluster",
             "knn_dist",
         }
+        control_keys = {"decision_mode", "hybrid_meta"}
         for key, value in thresholds.items():
-            if key in {"hybrid_meta"}:
+            if key in control_keys:
                 continue
             try:
                 numeric_value = float(value)
