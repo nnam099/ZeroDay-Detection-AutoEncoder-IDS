@@ -150,7 +150,7 @@ def get_config() -> CFG:
     cfg = CFG()
     in_nb = False
     try:
-        shell = get_ipython().__class__.__name__   # noqa
+        shell = get_ipython().__class__.__name__   # type: ignore
         in_nb = shell in ('ZMQInteractiveShell', 'Shell')
     except NameError:
         pass
@@ -777,7 +777,7 @@ def make_loaders(splits: Dict, batch_size: int = 512, num_workers: int = 2,
     va_ds = FlowDS(splits['X_val'],   splits['y_val'])
     te_ds = FlowDS(splits['X_test'],  splits['y_test'])
 
-    sampler = WeightedRandomSampler(torch.FloatTensor(weights), len(y_tr), replacement=True)
+    sampler = WeightedRandomSampler(list(weights), len(y_tr), replacement=True)
 
     gen = torch.Generator()
     gen.manual_seed(seed)
@@ -787,7 +787,7 @@ def make_loaders(splits: Dict, batch_size: int = 512, num_workers: int = 2,
         np.random.seed(worker_seed)
         random.seed(worker_seed)
 
-    kw = dict(
+    kw: Dict[str, Any] = dict(
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
         worker_init_fn=_seed_worker,
@@ -814,7 +814,7 @@ def train_epoch(model: IDSModel, loader: DataLoader, optimizer: torch.optim.Opti
         X, y = X.to(device), y.to(device)
         optimizer.zero_grad(set_to_none=True)
 
-        if use_amp:
+        if amp_scaler is not None:
             with torch.amp.autocast('cuda'):
                 logits, _ = model(X)
                 embeds    = model.get_embed(X)
@@ -1038,14 +1038,14 @@ def calibrate(model: IDSModel, X_val: np.ndarray, y_val: np.ndarray,
 def evaluate_classifier(model: IDSModel, X_te: np.ndarray, y_te: np.ndarray,
                          label_names: List[str], device: str) -> Dict:
     model.eval()
-    preds, probs_list = [], []
+    preds_list, probs_list = [], []
     with torch.no_grad():
         for i in range(0, len(X_te), 512):
             x = torch.FloatTensor(X_te[i:i+512]).to(device)
             lg, _ = model(x)
-            preds.append(lg.argmax(1).cpu().numpy())
+            preds_list.append(lg.argmax(1).cpu().numpy())
             probs_list.append(torch.softmax(lg, dim=-1).cpu().numpy())
-    preds = np.concatenate(preds)
+    preds = np.concatenate(preds_list)
     probs = np.concatenate(probs_list)
     print(classification_report(y_te, preds, target_names=label_names, digits=4))
 
