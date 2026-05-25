@@ -194,7 +194,8 @@ def build_top_batch_alerts(
     if "source_row" not in df.columns:
         df.insert(0, "source_row", np.arange(len(df)))
     sort_cols = [col for col in ["is_zeroday", "hybrid_score", "ae_score", "max_prob"] if col in df.columns]
-    ascending = [False, False, False, True][:len(sort_cols)]
+    desired_sort = {"is_zeroday": False, "hybrid_score": False, "ae_score": False, "max_prob": True}
+    ascending = [desired_sort[col] for col in sort_cols]
     if sort_cols:
         df = df.sort_values(sort_cols, ascending=ascending)
 

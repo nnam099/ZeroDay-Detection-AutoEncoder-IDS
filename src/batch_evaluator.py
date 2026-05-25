@@ -137,7 +137,7 @@ def run_batch_scores(raw_features: np.ndarray, artifacts: IDSArtifacts, batch_si
             ae_all.append(np.atleast_1d(ae_score))
 
             if artifacts.centroids is not None and hasattr(artifacts.model, "fv_cluster_score"):
-                fv_all.append(artifacts.model.fv_cluster_score(x, artifacts.centroids).cpu().numpy())
+                fv_all.append(artifacts.model.fv_cluster_score(x, artifacts.centroids).cpu().numpy())  # type: ignore
 
     probs_all_np = np.concatenate(probs_all, axis=0)
     ae_all_np = np.concatenate(ae_all, axis=0)
@@ -307,11 +307,11 @@ def _encode_categorical_column(series: pd.Series, mapping=None) -> np.ndarray:
 
 def _reconstruction_error(model: torch.nn.Module, x: torch.Tensor, probs: np.ndarray) -> np.ndarray:
     if hasattr(model, "ae"):
-        ae_score = model.ae.recon_error(x)
+        ae_score = model.ae.recon_error(x)  # type: ignore
     elif hasattr(model, "vae"):
-        ae_score = model.vae.recon_error(x)
+        ae_score = model.vae.recon_error(x)  # type: ignore
     elif hasattr(model, "autoencoder"):
-        recon = model.autoencoder(x)
+        recon = model.autoencoder(x)  # type: ignore
         ae_score = torch.mean((x - recon) ** 2, dim=-1)
     else:
         return 1.0 - probs.max(axis=1)

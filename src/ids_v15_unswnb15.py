@@ -1064,7 +1064,7 @@ def evaluate_classifier(model: IDSModel, X_te: np.ndarray, y_te: np.ndarray,
 def evaluate_zero_day(model: IDSModel, X_kn: np.ndarray, y_kn: np.ndarray,
                        X_zd: np.ndarray, y_zd: np.ndarray,
                        thr: Dict, centroids, device: str,
-                       knn: Optional[NearestNeighbors] = None) -> Dict:
+                       knn: Optional[NearestNeighbors] = None) -> Dict[str, Any]:
     print(f'\n{"="*65}')
     print(f'ZERO-DAY DETECTION  |  Known={len(X_kn):,}  ZD={len(X_zd):,}')
     print(f'{"="*65}')
@@ -1092,7 +1092,7 @@ def evaluate_zero_day(model: IDSModel, X_kn: np.ndarray, y_kn: np.ndarray,
         sz['ood_ensemble'] = ens_z / len(ens_methods)
 
     true    = np.concatenate([np.zeros(len(X_kn)), np.ones(len(X_zd))])
-    results = {}
+    results: Dict[str, Any] = {}
     print(f'\n  {"Method":<16} {"AUC":>8} {"AUPRC":>8} {"TPR@1%":>10} {"TPR@5%":>10}')
     print(f'  {"-"*56}')
     method_order = ['ood_ensemble','gradbp_l2','hybrid','ae_re','energy','softmax',
