@@ -9,6 +9,7 @@ from io import StringIO
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 import torch
 from sklearn.preprocessing import LabelEncoder, RobustScaler
 
@@ -222,7 +223,7 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertGreater(sampler_weights[3], sampler_weights[2])
 
     def test_environment_check_does_not_expose_secret_values(self):
-        from scripts.check_environment import assess_readiness, collect_environment
+        from scripts.check_environment import assess_readiness, collect_environment, python_version_status
 
         old_provider = os.environ.get("LLM_PROVIDER")
         old_key = os.environ.get("GROQ_API_KEY")
@@ -253,6 +254,9 @@ class CoreSmokeTests(unittest.TestCase):
         )
         self.assertEqual(readiness["status"], "BLOCKED")
         self.assertTrue(any("torch" in item for item in readiness["blockers"]))
+
+        self.assertTrue(python_version_status((3, 11, 9))["supported"])
+        self.assertFalse(python_version_status((3, 13, 0))["supported"])
 
     def test_environment_check_configures_utf8_console_output(self):
         from scripts.check_environment import configure_console_encoding
@@ -926,21 +930,26 @@ class CoreSmokeTests(unittest.TestCase):
             def forward(self, x):
                 return torch.stack([x[:, 1], x[:, 2]], dim=1)
 
-        raw = torch.tensor([[0.8, 0.1, 2.0], [0.1, 2.0, 0.1]], dtype=torch.float32).numpy()
+        raw = torch.tensor(
+            [[0.8, 0.1, 2.0], [0.1, 2.0, 0.1], [0.4, 1.8, 0.2]],
+            dtype=torch.float32,
+        ).numpy()
         result = run_batch_inference(
             TinyModel(),
             IdentityScaler(),
             raw,
             ["Normal", "DoS"],
             thresholds={"decision_mode": "vote", "min_votes": 2, "hybrid": 0.2, "ae_re": 0.5},
-            batch_size=1,
+            batch_size=2,
         )
 
-        self.assertEqual(len(result), 2)
-        self.assertEqual(result["classifier_class"].tolist(), ["DoS", "Normal"])
-        self.assertEqual(result["predicted_class"].tolist(), ["Zero-Day Candidate", "Normal"])
-        self.assertEqual(result["is_zeroday"].tolist(), [True, False])
+        self.assertEqual(len(result), 3)
+        self.assertEqual(result["classifier_class"].tolist(), ["DoS", "Normal", "Normal"])
+        self.assertEqual(result["predicted_class"].tolist(), ["Zero-Day Candidate", "Normal", "Normal"])
+        self.assertEqual(result["is_zeroday"].tolist(), [True, False, False])
         self.assertEqual(result["zero_day_rule"].iloc[0], "vote_2_of_2")
+        np.testing.assert_allclose(result["ae_score"].to_numpy(), [0.8, 0.1, 0.4], rtol=1e-6)
+        self.assertTrue(all(np.isscalar(value) for value in result["ae_score"]))
 
     def test_predict_with_uncertainty_uses_mc_dropout_contract(self):
         from ids.evaluator import predict_with_uncertainty

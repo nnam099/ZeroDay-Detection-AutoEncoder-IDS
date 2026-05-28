@@ -22,5 +22,3 @@ python-dotenv==1.0.1
 
 # Optional - MITRE
 # mitreattack-python
-
-streamlit==1.36.0

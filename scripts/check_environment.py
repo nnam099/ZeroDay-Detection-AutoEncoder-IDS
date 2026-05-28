@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import os
@@ -29,6 +30,17 @@ def module_available(name: str) -> bool:
         return False
 
 
+def python_version_status(version_info: tuple[int, int, int] | None = None) -> dict:
+    version = version_info or sys.version_info[:3]
+    major, minor, patch = version
+    supported = (major, minor) >= (3, 11) and (major, minor) < (3, 13)
+    return {
+        "version": f"{major}.{minor}.{patch}",
+        "requirement": ">=3.11,<3.13",
+        "supported": supported,
+    }
+
+
 def collect_environment() -> dict:
     packages = [
         "torch",
@@ -52,8 +64,11 @@ def collect_environment() -> dict:
     provider = os.getenv("LLM_PROVIDER", "").strip().lower()
     key_name = provider_keys.get(provider)
 
+    python = python_version_status()
     env = {
-        "python": sys.version.split()[0],
+        "python": python["version"],
+        "python_requirement": python["requirement"],
+        "python_supported": python["supported"],
         "root": str(ROOT_DIR),
         "packages": {name: module_available(name) for name in packages},
         "artifacts": {
@@ -86,6 +101,12 @@ def collect_environment() -> dict:
 def assess_readiness(env: dict) -> dict:
     blockers: list[str] = []
     warnings: list[str] = []
+
+    if env.get("python_supported") is False:
+        blockers.append(
+            f"Unsupported Python version: {env.get('python')} "
+            f"(required {env.get('python_requirement', '>=3.11,<3.13')})"
+        )
 
     packages = env.get("packages", {})
     for package in ["torch", "numpy", "pandas", "sklearn", "matplotlib", "fastapi", "uvicorn", "httpx", "dotenv"]:
@@ -136,8 +157,19 @@ def assess_readiness(env: dict) -> dict:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Report local IDS project environment readiness.")
+    parser.add_argument(
+        "--fail-on-blocked",
+        action="store_true",
+        help="Return a non-zero exit code when readiness status is BLOCKED.",
+    )
+    args = parser.parse_args()
+
     configure_console_encoding()
-    print(json.dumps(collect_environment(), indent=2, ensure_ascii=False))
+    env = collect_environment()
+    print(json.dumps(env, indent=2, ensure_ascii=False))
+    if args.fail_on_blocked and env.get("readiness", {}).get("status") == "BLOCKED":
+        return 1
     return 0
 
 

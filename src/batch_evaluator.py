@@ -116,6 +116,8 @@ def preprocess_raw_df(df_raw: pd.DataFrame, artifacts: IDSArtifacts) -> tuple[np
 def run_batch_scores(raw_features: np.ndarray, artifacts: IDSArtifacts, batch_size: int = 512) -> pd.DataFrame:
     if raw_features is None or len(raw_features) == 0:
         return pd.DataFrame()
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
 
     scaled = artifacts.pipeline["scaler"].transform(raw_features)
     scaled = np.clip(np.nan_to_num(scaled, nan=0.0, posinf=10.0, neginf=-10.0), -10.0, 10.0)
@@ -318,7 +320,7 @@ def _reconstruction_error(model: torch.nn.Module, x: torch.Tensor, probs: np.nda
 
     if isinstance(ae_score, torch.Tensor):
         ae_score = ae_score.cpu().numpy()
-    ae_score = np.atleast_1d(ae_score)
+    ae_score = np.atleast_1d(ae_score).reshape(-1)
     if ae_score.shape[0] != len(x):
         ae_score = np.full(len(x), float(np.mean(ae_score)), dtype=np.float32)
     return ae_score
