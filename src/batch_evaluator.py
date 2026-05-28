@@ -116,6 +116,8 @@ def preprocess_raw_df(df_raw: pd.DataFrame, artifacts: IDSArtifacts) -> tuple[np
 def run_batch_scores(raw_features: np.ndarray, artifacts: IDSArtifacts, batch_size: int = 512) -> pd.DataFrame:
     if raw_features is None or len(raw_features) == 0:
         return pd.DataFrame()
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
 
     scaled = artifacts.pipeline["scaler"].transform(raw_features)
     scaled = np.clip(np.nan_to_num(scaled, nan=0.0, posinf=10.0, neginf=-10.0), -10.0, 10.0)
@@ -137,7 +139,7 @@ def run_batch_scores(raw_features: np.ndarray, artifacts: IDSArtifacts, batch_si
             ae_all.append(np.atleast_1d(ae_score))
 
             if artifacts.centroids is not None and hasattr(artifacts.model, "fv_cluster_score"):
-                fv_all.append(artifacts.model.fv_cluster_score(x, artifacts.centroids).cpu().numpy())
+                fv_all.append(artifacts.model.fv_cluster_score(x, artifacts.centroids).cpu().numpy())  # type: ignore
 
     probs_all_np = np.concatenate(probs_all, axis=0)
     ae_all_np = np.concatenate(ae_all, axis=0)
@@ -176,7 +178,14 @@ def run_batch_scores(raw_features: np.ndarray, artifacts: IDSArtifacts, batch_si
     return out
 
 
-def summarize_scores(scores: pd.DataFrame, raw_df: pd.DataFrame | None = None, label_col: str | None = None) -> dict[str, Any]:
+def summarize_scores(
+    scores: pd.DataFrame,
+    raw_df: pd.DataFrame | None = None,
+    label_col: str | None = None,
+    class_names: list[str] | None = None,
+    zero_day_labels: list[str] | None = None,
+    thresholds: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if scores.empty:
         return {"rows": 0, "error": "no scores produced"}
 
@@ -200,15 +209,30 @@ def summarize_scores(scores: pd.DataFrame, raw_df: pd.DataFrame | None = None, l
         attack_mask = truth == "Known-Attack"
         summary["label_column"] = label_col
         summary["ground_truth_distribution"] = _value_counts(truth)
+        evaluation = _labeled_evaluation(
+            scores,
+            raw_df[label_col],
+            truth,
+            class_names=class_names,
+            zero_day_labels=zero_day_labels,
+        )
+        summary["evaluation"] = evaluation
+        summary["accuracy"] = evaluation.get("detection_accuracy")
+        summary["recall_per_class"] = evaluation.get("recall_per_class", {})
+        summary["ood_detection_rate"] = evaluation.get("ood_detection_rate")
         if bool(normal_mask.any()):
             normal_zd = scores.loc[normal_mask.values, "is_zeroday"]
             summary["normal_false_positive_rate"] = round(float(normal_zd.mean()), 6)
+            summary["false_positive_rate"] = summary["normal_false_positive_rate"]
             summary["normal_false_positive_count"] = int(normal_zd.sum())
             summary["normal_count"] = int(normal_mask.sum())
         if bool(attack_mask.any()):
             attack_known = scores.loc[attack_mask.values, "predicted_class"].isin(["Known-Attack", "Zero-Day Candidate"])
             summary["attack_detection_rate"] = round(float(attack_known.mean()), 6)
             summary["attack_count"] = int(attack_mask.sum())
+
+    if thresholds is not None:
+        summary["threshold_profile"] = _threshold_profile(thresholds)
 
     return summary
 
@@ -285,18 +309,18 @@ def _encode_categorical_column(series: pd.Series, mapping=None) -> np.ndarray:
 
 def _reconstruction_error(model: torch.nn.Module, x: torch.Tensor, probs: np.ndarray) -> np.ndarray:
     if hasattr(model, "ae"):
-        ae_score = model.ae.recon_error(x)
+        ae_score = model.ae.recon_error(x)  # type: ignore
     elif hasattr(model, "vae"):
-        ae_score = model.vae.recon_error(x)
+        ae_score = model.vae.recon_error(x)  # type: ignore
     elif hasattr(model, "autoencoder"):
-        recon = model.autoencoder(x)
+        recon = model.autoencoder(x)  # type: ignore
         ae_score = torch.mean((x - recon) ** 2, dim=-1)
     else:
         return 1.0 - probs.max(axis=1)
 
     if isinstance(ae_score, torch.Tensor):
         ae_score = ae_score.cpu().numpy()
-    ae_score = np.atleast_1d(ae_score)
+    ae_score = np.atleast_1d(ae_score).reshape(-1)
     if ae_score.shape[0] != len(x):
         ae_score = np.full(len(x), float(np.mean(ae_score)), dtype=np.float32)
     return ae_score
@@ -319,6 +343,89 @@ def _distribution(values: pd.Series) -> dict[str, float]:
 
 def _value_counts(values: pd.Series) -> dict[str, int]:
     return {str(k): int(v) for k, v in values.value_counts(dropna=False).to_dict().items()}
+
+
+def _labeled_evaluation(
+    scores: pd.DataFrame,
+    labels: pd.Series,
+    truth_verdict: pd.Series,
+    class_names: list[str] | None = None,
+    zero_day_labels: list[str] | None = None,
+) -> dict[str, Any]:
+    labels_text = labels.astype(str)
+    truth_verdict = truth_verdict.astype(str)
+    known_classes = {str(item) for item in (class_names or [])}
+    zero_day_set = {str(item) for item in (zero_day_labels or [])}
+    comparable_mask = truth_verdict.isin(["Normal", "Known-Attack"])
+    predicted_attack = scores["predicted_class"].isin(["Known-Attack", "Zero-Day Candidate"])
+    predicted_verdict = pd.Series(np.where(predicted_attack, "Known-Attack", "Normal"), index=scores.index)
+
+    out: dict[str, Any] = {
+        "rows_with_labels": int(comparable_mask.sum()),
+        "detection_accuracy": None,
+        "classifier_accuracy_known": None,
+        "recall_per_class": {},
+        "ood_detection_rate": None,
+        "zero_day_recall_per_family": {},
+    }
+
+    if bool(comparable_mask.any()):
+        out["detection_accuracy"] = round(
+            float((predicted_verdict.loc[comparable_mask.values].values == truth_verdict.loc[comparable_mask].values).mean()),
+            6,
+        )
+
+    if known_classes:
+        known_mask = labels_text.isin(known_classes)
+        if bool(known_mask.any()):
+            known_scores = scores.loc[known_mask.values]
+            known_labels = labels_text.loc[known_mask].reset_index(drop=True)
+            known_pred = known_scores["classifier_class"].astype(str).reset_index(drop=True)
+            out["classifier_accuracy_known"] = round(float((known_pred == known_labels).mean()), 6)
+            recall: dict[str, dict[str, Any]] = {}
+            for cls in sorted(known_classes):
+                cls_mask = known_labels == cls
+                if bool(cls_mask.any()):
+                    correct = int((known_pred.loc[cls_mask] == cls).sum())
+                    total = int(cls_mask.sum())
+                    recall[cls] = {"recall": round(correct / total, 6), "support": total}
+            out["recall_per_class"] = recall
+
+    if zero_day_set:
+        zd_mask = labels_text.isin(zero_day_set)
+        if bool(zd_mask.any()):
+            zd_scores = scores.loc[zd_mask.values]
+            out["ood_detection_rate"] = round(float(zd_scores["is_zeroday"].mean()), 6)
+            family_recall: dict[str, dict[str, Any]] = {}
+            for family in sorted(zero_day_set):
+                family_mask = labels_text == family
+                if bool(family_mask.any()):
+                    detected = scores.loc[family_mask.values, "is_zeroday"]
+                    family_recall[family] = {
+                        "recall": round(float(detected.mean()), 6),
+                        "support": int(family_mask.sum()),
+                    }
+            out["zero_day_recall_per_family"] = family_recall
+
+    return out
+
+
+def _threshold_profile(thresholds: dict[str, Any]) -> dict[str, Any]:
+    profile = {}
+    for key, value in thresholds.items():
+        if key == "hybrid_meta":
+            profile[key] = {
+                "type": value.get("type"),
+                "features": value.get("features"),
+                "coef": value.get("coef"),
+                "intercept": value.get("intercept"),
+            } if isinstance(value, dict) else value
+            continue
+        try:
+            profile[key] = float(value)
+        except (TypeError, ValueError):
+            profile[key] = value
+    return profile
 
 
 def _traffic_verdict_bool(is_zeroday: Any, classifier_class: str) -> str:

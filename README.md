@@ -22,12 +22,12 @@ Main flow:
 
 - v14 is the operational default because local artifacts exist in `checkpoints/`.
 - Runtime dependencies are pinned in `requirements.txt`; smoke-check dependency ranges are in `requirements-smoke.txt`; developer tooling is in `requirements-dev.txt`.
-- `scripts/smoke_check.py` passes locally with 43 tests.
-- Smoke coverage includes artifact contract validation, threshold metadata validation, artifact manifest hashing, duplicate feature-name rejection, environment readiness checks, export config handling, checkpoint metadata patch logic, SQLite alert store persistence, CSV input guardrails, CSV normalization quality checks, dashboard preprocessing/context contracts, AI context selection, alert queue filtering, top-N batch alert selection, alert entity enrichment, lightweight correlation, Recon/DoS prototype separation, LLM fallback behavior, MITRE mapping and v14 artifact loading.
+- `scripts/smoke_check.py` passes locally with 54 tests, with the v15 artifact smoke test skipped until v15 artifacts exist.
+- Smoke coverage includes artifact contract validation, threshold metadata validation, artifact manifest hashing, duplicate feature-name rejection, environment readiness checks, export config handling, checkpoint metadata patch logic, SQLite alert store persistence, CSV input guardrails, CSV normalization quality checks, dashboard preprocessing/context contracts, dashboard UI helper contracts, AI context selection, alert queue filtering, top-N batch alert selection, alert entity enrichment, lightweight correlation, time-window incident grouping, labeled evaluation reporting, API edge cases, Recon/DoS prototype separation, LLM fallback behavior, MITRE mapping and v14 artifact loading.
 - `llm_agent.py` lazy-loads provider clients, so importing dashboard code does not require an API key.
 - A Windows GitHub Actions smoke workflow is available at `.github/workflows/smoke.yml`.
 - A Dockerfile is available for FastAPI inference on port `8080`.
-- v14 performance metrics have not been regenerated after the latest operational fixes; `results/ids_v14_results.json` records artifact smoke verification only.
+- v14 artifact evaluation has been regenerated from the current saved artifacts on `UNSW_NB15_testing-set.csv`; `results/ids_v14_results.json` includes accuracy, per-class recall, OOD detection rate, false-positive rate and threshold profile. Current normal false-positive rate is high, so threshold calibration remains a priority before operational use.
 
 ## Features
 
@@ -37,6 +37,7 @@ Main flow:
 - FastAPI inference server for real-time JSON predictions from saved v14 artifacts.
 - Monte Carlo Dropout uncertainty for served predictions, with `LOW_CONFIDENCE` labeling when entropy is high.
 - SQLite alert store for persisted queue history, status, analyst notes, queue filtering, top-N batch alert persistence and lightweight correlation groups.
+- Time-window incident grouping across repeated source IP, service, class and attack-family signals in the analyst queue.
 - Real-world CSV normalization for common firewall/flow/Zeek/Suricata-like exports.
 - CSV upload guardrails for empty, oversized or malformed files.
 - SHAP top-feature explanation.
@@ -64,6 +65,14 @@ src/
   llm_agent.py             # optional lazy-loaded LLM triage
 dashboard/
   app.py                   # Streamlit SOC dashboard
+  views_queue.py           # alert queue, correlation and incident-window UI
+  views_analysis.py        # alert-analysis safety UI helpers
+  views_batch.py           # CSV batch summary UI helpers
+  views_ood.py             # OOD candidate detail table helpers
+  views_ai.py              # Ask AI context/suggestion UI helpers
+  views_report.py          # JSON report/export helpers
+  views_setup.py           # setup/status UI helpers
+  ui_safety.py             # shared limitations and report safety copy
 configs/
   config_default.yaml      # default v15 config
 docs/
@@ -80,6 +89,7 @@ scripts/
   quality_check.ps1
   run_dashboard.ps1
   evaluate_csv.py
+  regenerate_v14_report.py
   train_v14.ps1
   train_v15.ps1
   train.sh
@@ -309,6 +319,17 @@ Train v14:
 python train.py --data_dir data/ --save_dir checkpoints/ --plot_dir plots/
 ```
 
+The default v14 training config now gives extra sampler/loss weight to the weak
+known classes observed in artifact evaluation (`Exploits` and
+`Reconnaissance`) while reducing the previous DoS sampler bias. Override these
+without code changes:
+
+```bash
+python train.py --class_loss_weights "Exploits=3.0,Reconnaissance=3.0" \
+  --class_sampler_weights "Exploits=4.0,Reconnaissance=4.0" \
+  --dos_sampler_weight 1.5
+```
+
 PowerShell launcher:
 
 ```powershell
@@ -399,6 +420,23 @@ python -m ruff check .
 | Import or console encoding errors on Windows paths | Set `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8`; `scripts/smoke_check.py` already does this for subprocesses. |
 | Docker container cannot find artifacts | Mount `checkpoints/` into `/app/checkpoints` or build a deployment-specific image that includes trusted artifacts. |
 
+## Regenerate v14 Evaluation Report
+
+Evaluate the current saved v14 artifacts without retraining:
+
+```powershell
+python scripts/regenerate_v14_report.py --csv-path data\UNSW_NB15_testing-set.csv --label-col attack_cat
+```
+
+This refreshes `results/ids_v14_results.json` and writes evaluation plots in `plots/`:
+
+- `v14_eval_verdict_distribution.png`
+- `v14_eval_score_distribution.png`
+- `v14_eval_known_class_recall.png`
+
+The report includes detection accuracy, known-class recall, OOD detection rate, normal false-positive rate and the active threshold profile. A high false-positive rate means the current thresholds need recalibration before using the model for operational alerting.
+If `checkpoints/local_thresholds.json` exists, the report also includes a calibrated-threshold what-if section. With `target_fpr=0.05` on the current test CSV, the local vote profile reduces normal FPR to about `4.70%`, but OOD detection drops to about `5.54%`, so this is a precision/recall tradeoff rather than a free improvement.
+
 ## Evaluate and Calibrate CSV Drift
 
 Use the CSV evaluator before retraining when a new dataset produces too many
@@ -424,6 +462,15 @@ The dashboard automatically loads `checkpoints/local_thresholds.json` when it is
 present. Override with `IDS_THRESHOLD_PROFILE` if you want to test another
 profile. Local profiles use vote-based OOD candidate decisions by default, so a row
 must cross multiple calibrated signals instead of only the hybrid score.
+
+Current local calibration example:
+
+```powershell
+python scripts/evaluate_csv.py data\UNSW_NB15_testing-set.csv --label-col attack_cat --calibrate-thresholds --target-fpr 0.05
+python scripts/regenerate_v14_report.py --csv-path data\UNSW_NB15_testing-set.csv --label-col attack_cat
+```
+
+The dashboard loads `checkpoints/local_thresholds.json` automatically. Keep this file local unless you intentionally publish a calibrated deployment profile.
 
 ## Prepare Production Flow Data
 
@@ -494,8 +541,10 @@ For demo and runtime procedures, see [docs/operations.md](docs/operations.md).
 ## Limitations
 
 - MITRE mapping is heuristic and should be treated as triage support.
-- Zero-day results depend strongly on feature quality, scaler compatibility and threshold calibration.
+- `Zero-Day Candidate` means the row crossed OOD/anomaly rules and needs analyst review. It is not proof of a novel attack, attribution or compromise.
+- Zero-day results depend strongly on feature quality, scaler compatibility and threshold calibration. The regenerated v14 artifact report currently shows a high normal false-positive rate, so recalibrate thresholds before operational demos that claim realistic SOC precision.
 - Real-world CSV normalization is approximate when directional counters or timing fields are missing.
+- LLM triage is optional decision support and must not be treated as the detection engine or a final verdict.
 - v15 is experimental until v15 artifacts are trained/exported and smoke-tested.
 - The dashboard is not hardened for production deployment: no authentication, no realtime packet capture and no deployment security controls.
 

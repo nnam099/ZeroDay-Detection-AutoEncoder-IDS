@@ -1,29 +1,258 @@
 {
-  "version": "v14.0",
-  "status": "artifact_smoke_verified",
-  "updated_at": "2026-05-13",
-  "verification": {
-    "command": "python scripts/smoke_check.py",
-    "tests": 15,
-    "result": "pass",
-    "checks": [
-      "Python compile for src, dashboard, scripts, export helpers and tests",
-      "artifact contract validator accepts/rejects expected metadata",
-      "artifact contract validator rejects duplicate feature names",
-      "artifact contract validator rejects invalid threshold metadata",
-      "export helper builds training config from CLI overrides",
-      "environment check reports LLM key presence without exposing secret values",
-      "artifact manifest detects SHA-256 drift for changed artifact files",
-      "uploaded CSV input guard rejects empty or oversized dashboard inputs",
-      "checkpoint patch helper infers hidden dimensions from checkpoint state",
-      "real-world CSV normalizer maps common firewall flow fields",
-      "inference verdict, risk and CSV-quality helpers return expected decisions",
-      "MITRE mapper returns techniques for known attacks",
-      "llm_agent import has no provider/API-key side effect",
-      "llm_agent returns fallback triage when API key/provider is unavailable",
-      "v14 checkpoint and pipeline load with matching feature/class counts"
-    ]
+  "calibrated_threshold_evaluation": {
+    "decision_rule": "vote_2_of_3",
+    "normal_false_positive_rate": 0.046964,
+    "ood_detection_rate": 0.055392,
+    "profile_path": "D:\\K\u00ec 2 N\u0103m 3\\Th\u1ef1c T\u1eadp C\u01a1 S\u1edf\\AI_Train\\ZeroDay-Detection-AutoEncoder-IDS\\checkpoints\\local_thresholds.json",
+    "reference_rows": 56000,
+    "target_fpr": 0.05,
+    "thresholds": {
+      "ae_re": 1.7397907793521863,
+      "decision_mode": "vote",
+      "fv_cluster": 0.6231321513652801,
+      "hybrid": 0.9462801158428191,
+      "min_votes": 2,
+      "softmax": 0.4452653408050537
+    },
+    "tradeoff_note": "Lower FPR can reduce OOD recall; validate the chosen target_fpr against analyst capacity.",
+    "zero_day_count": 5688,
+    "zero_day_rate": 0.03244
   },
-  "metrics": null,
-  "note": "Model performance metrics were not regenerated in this verification pass. Run python src/ids_v14_unswnb15.py --data_dir data/ --save_dir checkpoints/ --plot_dir plots/ to retrain and refresh evaluation plots/metrics."
+  "input_csv": "D:\\K\u00ec 2 N\u0103m 3\\Th\u1ef1c T\u1eadp C\u01a1 S\u1edf\\AI_Train\\ZeroDay-Detection-AutoEncoder-IDS\\data\\UNSW_NB15_testing-set.csv",
+  "known_cats": [
+    "Normal",
+    "DoS",
+    "Exploits",
+    "Reconnaissance",
+    "Generic"
+  ],
+  "limitations_and_safety": {
+    "regeneration_note": "This report evaluates the current saved v14 artifacts. It does not retrain model weights.",
+    "required_validation": "Confirm suspicious rows with SIEM, firewall, endpoint and packet evidence.",
+    "zero_day_candidate_meaning": "OOD hypothesis for analyst review; not a confirmed novel attack."
+  },
+  "metrics": {
+    "accuracy": 0.8182,
+    "attack_count": 119341,
+    "attack_detection_rate": 0.987758,
+    "classifier_distribution": {
+      "DoS": 86827,
+      "Exploits": 92,
+      "Generic": 39810,
+      "Normal": 48612
+    },
+    "evaluation": {
+      "classifier_accuracy_known": 0.628533,
+      "detection_accuracy": 0.8182,
+      "ood_detection_rate": 0.244463,
+      "recall_per_class": {
+        "DoS": {
+          "recall": 0.952381,
+          "support": 12264
+        },
+        "Exploits": {
+          "recall": 0.002665,
+          "support": 33393
+        },
+        "Generic": {
+          "recall": 0.968025,
+          "support": 40000
+        },
+        "Normal": {
+          "recall": 0.806071,
+          "support": 56000
+        },
+        "Reconnaissance": {
+          "recall": 0.0,
+          "support": 10491
+        }
+      },
+      "rows_with_labels": 175341,
+      "zero_day_recall_per_family": {
+        "Analysis": {
+          "recall": 0.0945,
+          "support": 2000
+        },
+        "Fuzzers": {
+          "recall": 0.270842,
+          "support": 18184
+        },
+        "Shellcode": {
+          "recall": 0.084731,
+          "support": 1133
+        },
+        "Worms": {
+          "recall": 0.253846,
+          "support": 130
+        }
+      }
+    },
+    "false_positive_rate": 0.404893,
+    "ground_truth_distribution": {
+      "Known-Attack": 119341,
+      "Normal": 56000
+    },
+    "label_column": "attack_cat",
+    "normal_count": 56000,
+    "normal_false_positive_count": 22674,
+    "normal_false_positive_rate": 0.404893,
+    "ood_detection_rate": 0.244463,
+    "recall_per_class": {
+      "DoS": {
+        "recall": 0.952381,
+        "support": 12264
+      },
+      "Exploits": {
+        "recall": 0.002665,
+        "support": 33393
+      },
+      "Generic": {
+        "recall": 0.968025,
+        "support": 40000
+      },
+      "Normal": {
+        "recall": 0.806071,
+        "support": 56000
+      },
+      "Reconnaissance": {
+        "recall": 0.0,
+        "support": 10491
+      }
+    },
+    "rows": 175341,
+    "score_distribution": {
+      "ae_re": {
+        "max": 4.461782455444336,
+        "mean": 0.5258255004882812,
+        "min": 0.1229233667254448,
+        "p50": 0.27495071291923523,
+        "p90": 1.2991538047790527,
+        "p95": 1.5639783143997192,
+        "p99": 2.059063768386842
+      },
+      "fv_cluster": {
+        "max": 0.8550946712493896,
+        "mean": 0.3760039806365967,
+        "min": 0.0878153145313263,
+        "p50": 0.37023037672042847,
+        "p90": 0.6310713291168213,
+        "p95": 0.6680871844291687,
+        "p99": 0.734551727771759
+      },
+      "hybrid": {
+        "max": 2.4020683765411377,
+        "mean": 0.32081329822540283,
+        "min": 0.07546452432870865,
+        "p50": 0.19575996696949005,
+        "p90": 0.7231286764144897,
+        "p95": 0.8921521902084351,
+        "p99": 1.1761822223663343
+      },
+      "max_prob": {
+        "max": 0.9803646802902222,
+        "mean": 0.884198784828186,
+        "min": 0.30152592062950134,
+        "p50": 0.9402704834938049,
+        "p90": 0.969676673412323,
+        "p95": 0.9721091389656067,
+        "p99": 0.9735503196716309
+      },
+      "softmax": {
+        "max": 0.6984740495681763,
+        "mean": 0.11580114811658859,
+        "min": 0.019635319709777832,
+        "p50": 0.05972951650619507,
+        "p90": 0.32190388441085815,
+        "p95": 0.4384915828704834,
+        "p99": 0.5512506008148195
+      }
+    },
+    "threshold_profile": {
+      "ae_re": 0.7805483341217041,
+      "energy": -3.141861915588379,
+      "fv_cluster": 0.39007243514060974,
+      "gradbp_l2": 0.0006629567360505462,
+      "hybrid": 0.4659219980239868,
+      "softmax": 0.44672542810440063
+    },
+    "verdict_distribution": {
+      "Known-Attack": 105462,
+      "Normal": 27045,
+      "Zero-Day Candidate": 42834
+    },
+    "zero_day_count": 42834,
+    "zero_day_rate": 0.24429
+  },
+  "model_path": "D:\\K\u00ec 2 N\u0103m 3\\Th\u1ef1c T\u1eadp C\u01a1 S\u1edf\\AI_Train\\ZeroDay-Detection-AutoEncoder-IDS\\checkpoints\\ids_v14_model.pth",
+  "n_classes": 5,
+  "n_features": 61,
+  "normalization_report": {
+    "derived_columns": [
+      "dintpkt",
+      "dmeansz",
+      "sintpkt",
+      "smeansz"
+    ],
+    "feature_coverage": 1.0,
+    "input_columns": 45,
+    "mapped_columns": {
+      "ackdat": "ackdat",
+      "attack_cat": "attack_cat",
+      "ct_dst_ltm": "ct_dst_ltm",
+      "ct_dst_sport_ltm": "ct_dst_sport_ltm",
+      "ct_dst_src_ltm": "ct_dst_src_ltm",
+      "ct_src_dport_ltm": "ct_src_dport_ltm",
+      "ct_src_ltm": "ct_src_ltm",
+      "ct_srv_dst": "ct_srv_dst",
+      "ct_srv_src": "ct_srv_src",
+      "dbytes": "dbytes",
+      "djit": "djit",
+      "dload": "dload",
+      "dloss": "dloss",
+      "dpkts": "dpkts",
+      "dttl": "dttl",
+      "dur": "dur",
+      "label": "label",
+      "proto": "proto",
+      "sbytes": "sbytes",
+      "service": "service",
+      "sjit": "sjit",
+      "sload": "sload",
+      "sloss": "sloss",
+      "spkts": "spkts",
+      "state": "state",
+      "sttl": "sttl",
+      "synack": "synack",
+      "tcprtt": "tcprtt"
+    },
+    "missing_core_features": [],
+    "output_columns": 32,
+    "rows": 175341,
+    "schema": "unsw_nb15"
+  },
+  "pipeline_path": "D:\\K\u00ec 2 N\u0103m 3\\Th\u1ef1c T\u1eadp C\u01a1 S\u1edf\\AI_Train\\ZeroDay-Detection-AutoEncoder-IDS\\checkpoints\\ids_v14_pipeline.pkl",
+  "plots": [
+    "plots\\v14_eval_verdict_distribution.png",
+    "plots\\v14_eval_score_distribution.png",
+    "plots\\v14_eval_known_class_recall.png"
+  ],
+  "regeneration_mode": "current_artifact_evaluation",
+  "status": "artifact_evaluation_regenerated",
+  "threshold_profile": {
+    "ae_re": 0.7805483341217041,
+    "energy": -3.141861915588379,
+    "fv_cluster": 0.39007243514060974,
+    "gradbp_l2": 0.0006629567360505462,
+    "hybrid": 0.4659219980239868,
+    "softmax": 0.44672542810440063
+  },
+  "updated_at": "2026-05-22T14:53:52Z",
+  "version": "v14.0",
+  "zd_cats": [
+    "Fuzzers",
+    "Analysis",
+    "Backdoors",
+    "Shellcode",
+    "Worms"
+  ]
 }

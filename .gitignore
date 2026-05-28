@@ -1,6 +1,9 @@
 .env
 __pycache__/
 *.py[cod]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
 checkpoints/
 data/*
 !data/README.md
@@ -13,3 +16,5 @@ data/*
 *.db
 *.db-wal
 *.db-shm
+results/*.log
+results/csv_eval/

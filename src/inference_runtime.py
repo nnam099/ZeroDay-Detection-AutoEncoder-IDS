@@ -67,8 +67,8 @@ def _autoencoder_reconstruction_error(model, x, probs):
 
     if isinstance(ae_score, torch.Tensor):
         ae_score = ae_score.detach().cpu().numpy()
-    ae_score = np.atleast_1d(ae_score).astype(np.float32)
-    if ae_score.ndim == 0 or ae_score.shape[0] != len(x):
+    ae_score = np.atleast_1d(ae_score).astype(np.float32).reshape(-1)
+    if ae_score.shape[0] != len(x):
         ae_score = np.full(len(x), float(np.mean(ae_score)), dtype=np.float32)
     return ae_score
 
@@ -88,8 +88,11 @@ def run_batch_inference(
         return pd.DataFrame()
     if raw_features is None or len(raw_features) == 0:
         return pd.DataFrame()
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
 
     scaled = scaler.transform(raw_features)
+    scaled = np.clip(np.nan_to_num(scaled, nan=0.0, posinf=10.0, neginf=-10.0), -10.0, 10.0)
     tensor = torch.as_tensor(scaled, dtype=torch.float32)
     probs_all = []
     ae_all = []
@@ -110,14 +113,14 @@ def run_batch_inference(
     if not probs_all or not ae_all:
         return pd.DataFrame()
 
-    probs_all = np.concatenate(probs_all, axis=0)
-    ae_all = np.concatenate(ae_all, axis=0)
-    max_prob = probs_all.max(axis=1)
-    pred_idx = probs_all.argmax(axis=1)
+    probs_arr = np.concatenate(probs_all, axis=0)
+    ae_arr = np.concatenate(ae_all, axis=0)
+    max_prob = probs_arr.max(axis=1)
+    pred_idx = probs_arr.argmax(axis=1)
     pred_class = [class_names[i] if i < len(class_names) else "Unknown" for i in pred_idx]
-    hybrid_score = hybrid_score_from_meta(ae_all, max_prob, thresholds=thresholds)
+    hybrid_score = hybrid_score_from_meta(ae_arr, max_prob, thresholds=thresholds)
     is_zeroday, decision_rule = zero_day_decision(
-        ae_all,
+        ae_arr,
         max_prob,
         hybrid_score,
         thresholds=thresholds,
@@ -131,7 +134,7 @@ def run_batch_inference(
         "predicted_class": verdict,
         "classifier_class": pred_class,
         "max_prob": max_prob,
-        "ae_score": ae_all,
+        "ae_score": ae_arr,
         "hybrid_score": hybrid_score,
         "is_zeroday": is_zeroday,
         "zero_day_rule": decision_rule,
@@ -186,7 +189,7 @@ def assess_normalization_quality(report: dict | None) -> dict:
 
     coverage = report.get("feature_coverage")
     try:
-        coverage = float(coverage)
+        coverage = float(coverage) if coverage is not None else None
     except (TypeError, ValueError):
         coverage = None
 

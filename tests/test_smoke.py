@@ -9,6 +9,7 @@ from io import StringIO
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 import torch
 from sklearn.preprocessing import LabelEncoder, RobustScaler
 
@@ -17,6 +18,9 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SRC_DIR = os.path.join(ROOT_DIR, "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
+DASHBOARD_DIR = os.path.join(ROOT_DIR, "dashboard")
+if DASHBOARD_DIR not in sys.path:
+    sys.path.insert(0, DASHBOARD_DIR)
 
 
 class CoreSmokeTests(unittest.TestCase):
@@ -116,6 +120,29 @@ class CoreSmokeTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
 
+    def test_artifact_validator_accepts_vote_threshold_controls(self):
+        from artifact_validator import validate_artifact_contract
+
+        scaler = RobustScaler().fit([[0, 1, 2], [3, 4, 5]])
+        label_encoder = LabelEncoder().fit(["Normal", "DoS"])
+        result = validate_artifact_contract(
+            {"model_state_dict": {}, "n_features": 3, "n_classes": 2},
+            {
+                "scaler": scaler,
+                "label_encoder": label_encoder,
+                "feature_names": ["dur", "sbytes", "dbytes"],
+                "thresholds": {
+                    "decision_mode": "vote",
+                    "min_votes": 2,
+                    "hybrid": 0.5,
+                    "ae_re": 0.8,
+                    "softmax": 0.4,
+                },
+            },
+        )
+
+        self.assertTrue(result.ok)
+
     def test_patch_checkpoint_infers_dims_from_state_dict(self):
         from patch_checkpoint import infer_dims
 
@@ -154,8 +181,49 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertTrue(cfg.demo)
         self.assertEqual(cfg.seed, 123)
 
+    def test_train_class_weight_overrides_target_weak_classes(self):
+        from ids.dataset import make_loaders
+        from ids.losses import IDSLoss
+        from train import parse_class_weight_overrides
+
+        labels = ["Normal", "DoS", "Exploits", "Reconnaissance", "Generic"]
+        overrides = parse_class_weight_overrides("Exploits=3.0,Reconnaissance=4.0", labels)
+
+        self.assertEqual(overrides, {2: 3.0, 3: 4.0})
+
+        criterion = IDSLoss(
+            n_classes=5,
+            dos_class_idx=1,
+            dos_weight=1.5,
+            class_weight_overrides=overrides,
+        )
+        weights = criterion.focal.w.detach().cpu().numpy()
+        self.assertGreater(weights[2], weights[1])
+        self.assertGreater(weights[3], weights[2])
+
+        splits = {
+            "X_train": [[0.0], [1.0], [2.0], [3.0]],
+            "y_train": [0, 1, 2, 3],
+            "X_val": [[0.0]],
+            "y_val": [0],
+            "X_test": [[0.0]],
+            "y_test": [0],
+        }
+        loaders = make_loaders(
+            splits,
+            batch_size=2,
+            num_workers=0,
+            dos_class_idx=1,
+            dos_over=1.5,
+            class_sample_weights=overrides,
+            seed=7,
+        )
+        sampler_weights = loaders["train"].sampler.weights.detach().cpu().numpy()
+        self.assertGreater(sampler_weights[2], sampler_weights[1])
+        self.assertGreater(sampler_weights[3], sampler_weights[2])
+
     def test_environment_check_does_not_expose_secret_values(self):
-        from scripts.check_environment import assess_readiness, collect_environment
+        from scripts.check_environment import assess_readiness, collect_environment, python_version_status
 
         old_provider = os.environ.get("LLM_PROVIDER")
         old_key = os.environ.get("GROQ_API_KEY")
@@ -186,6 +254,9 @@ class CoreSmokeTests(unittest.TestCase):
         )
         self.assertEqual(readiness["status"], "BLOCKED")
         self.assertTrue(any("torch" in item for item in readiness["blockers"]))
+
+        self.assertTrue(python_version_status((3, 11, 9))["supported"])
+        self.assertFalse(python_version_status((3, 13, 0))["supported"])
 
     def test_environment_check_configures_utf8_console_output(self):
         from scripts.check_environment import configure_console_encoding
@@ -668,6 +739,159 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertEqual(dos_group["ood_count"], 1)
         self.assertEqual(dos_group["max_risk"], 90)
 
+    def test_dashboard_runtime_builds_time_window_incidents(self):
+        from dashboard_runtime import build_time_window_incidents
+
+        alerts = [
+            {
+                "alert_id": "A1",
+                "timestamp": "2026-05-14 10:00:00",
+                "src_ip": "10.0.0.5",
+                "service": "https",
+                "classifier_class": "DoS",
+                "zero_day_family": "Shellcode",
+                "is_zeroday": True,
+                "risk": 92,
+                "llm_severity": "CRITICAL",
+            },
+            {
+                "alert_id": "A2",
+                "timestamp": "2026-05-14 10:08:00",
+                "src_ip": "10.0.0.5",
+                "service": "https",
+                "classifier_class": "DoS",
+                "zero_day_family": "Shellcode",
+                "is_zeroday": False,
+                "risk": 76,
+                "llm_severity": "HIGH",
+            },
+            {
+                "alert_id": "A3",
+                "timestamp": "2026-05-14 10:40:00",
+                "src_ip": "10.0.0.5",
+                "service": "https",
+                "classifier_class": "DoS",
+                "is_zeroday": False,
+                "risk": 55,
+                "llm_severity": "MEDIUM",
+            },
+            {
+                "alert_id": "A4",
+                "timestamp": "2026-05-14 10:05:00",
+                "src_ip": "10.0.0.8",
+                "service": "dns",
+                "classifier_class": "Normal",
+                "is_zeroday": False,
+                "risk": 10,
+            },
+        ]
+
+        incidents = build_time_window_incidents(alerts, window_minutes=15, min_alerts=2)
+
+        source_incident = next(item for item in incidents if item["group_type"] == "Source IP")
+        self.assertEqual(source_incident["key"], "10.0.0.5")
+        self.assertEqual(source_incident["alert_count"], 2)
+        self.assertEqual(source_incident["ood_count"], 1)
+        self.assertEqual(source_incident["high_count"], 2)
+        self.assertEqual(source_incident["max_risk"], 92)
+        self.assertEqual(source_incident["severity"], "CRITICAL")
+        self.assertEqual(source_incident["primary_classes"], ["DoS"])
+        self.assertEqual(source_incident["families"], ["Shellcode"])
+        self.assertEqual(source_incident["alert_ids"], ["A1", "A2"])
+        self.assertIn("Source IP: 10.0.0.5", source_incident["recommended_focus"])
+        self.assertTrue(all(item["end_time"] <= "2026-05-14 10:15:00" for item in incidents))
+
+    def test_dashboard_view_helpers_are_testable(self):
+        from ui_safety import attach_report_safety_note
+        from views_ood import build_feature_table, build_score_table, enrich_ood_row
+        from views_queue import build_history_dataframe, queue_summary
+        from views_report import build_export_report
+
+        alerts = [
+            {
+                "alert_id": "A1",
+                "timestamp": "2026-05-14 10:00:00",
+                "status": "new",
+                "source": "single",
+                "llm_severity": "HIGH",
+                "predicted_class": "Zero-Day Candidate",
+                "classifier_class": "DoS",
+                "hybrid_score": 0.9,
+                "ae_score": 0.8,
+                "is_zeroday": True,
+            },
+            {
+                "alert_id": "A2",
+                "timestamp": "2026-05-14 10:01:00",
+                "status": "closed",
+                "source": "single",
+                "llm_severity": "LOW",
+                "predicted_class": "Normal",
+                "classifier_class": "Normal",
+                "hybrid_score": 0.1,
+                "ae_score": 0.1,
+                "is_zeroday": False,
+            },
+        ]
+
+        summary = queue_summary(alerts)
+        self.assertEqual(summary["alerts"], 2)
+        self.assertEqual(summary["critical_high"], 1)
+        self.assertEqual(summary["ood"], 1)
+        self.assertGreater(summary["average_risk"], 0)
+
+        df = build_history_dataframe(alerts)
+        self.assertEqual(df.iloc[0]["Alert ID"], "A1")
+        self.assertEqual(df.iloc[0]["OOD Candidate"], "YES")
+
+        report = attach_report_safety_note({"alert_id": "A1"})
+        self.assertIn("limitations_and_safety", report)
+        self.assertIn("zero_day_candidate_meaning", report["limitations_and_safety"])
+
+        export = build_export_report({"alert_id": "A1", "shap_values": [1], "probs": [0.5]}, {"severity": "HIGH"})
+        self.assertNotIn("shap_values", export)
+        self.assertNotIn("probs", export)
+        self.assertEqual(export["llm_analysis"]["severity"], "HIGH")
+
+        ood_row = enrich_ood_row({"source_row": 5, "hybrid_score": 0.9, "ae_score": 0.8, "is_zeroday": True})
+        self.assertEqual(ood_row["detection"], "Zero-Day Candidate")
+        self.assertGreater(ood_row["risk"], 80)
+        feature_table = build_feature_table(pd.Series({"dur": 1.2, "zzz": "tail"}), search="dur")
+        self.assertEqual(feature_table["Feature"].tolist(), ["dur"])
+        score_table = build_score_table({"source_row": 5, "hybrid_score": 0.9})
+        self.assertEqual(score_table["Metric"].tolist(), ["hybrid_score"])
+
+    def test_batch_evaluator_reports_labeled_metrics(self):
+        from batch_evaluator import summarize_scores
+
+        scores = pd.DataFrame({
+            "predicted_class": ["Normal", "Known-Attack", "Zero-Day Candidate", "Known-Attack"],
+            "classifier_class": ["Normal", "DoS", "Normal", "Exploits"],
+            "is_zeroday": [False, False, True, False],
+            "hybrid": [0.1, 0.7, 0.8, 0.6],
+            "ae_re": [0.1, 0.5, 0.9, 0.4],
+            "softmax": [0.05, 0.3, 0.7, 0.2],
+            "max_prob": [0.95, 0.7, 0.3, 0.8],
+        })
+        raw = pd.DataFrame({"attack_cat": ["Normal", "DoS", "Shellcode", "DoS"]})
+
+        summary = summarize_scores(
+            scores,
+            raw_df=raw,
+            label_col="attack_cat",
+            class_names=["Normal", "DoS", "Exploits"],
+            zero_day_labels=["Shellcode"],
+            thresholds={"hybrid": 0.5, "ae_re": 0.4, "hybrid_meta": {"type": "logistic_regression"}},
+        )
+
+        self.assertEqual(summary["accuracy"], 1.0)
+        self.assertEqual(summary["false_positive_rate"], 0.0)
+        self.assertEqual(summary["ood_detection_rate"], 1.0)
+        self.assertEqual(summary["recall_per_class"]["Normal"]["recall"], 1.0)
+        self.assertEqual(summary["recall_per_class"]["DoS"]["recall"], 0.5)
+        self.assertEqual(summary["threshold_profile"]["hybrid"], 0.5)
+        self.assertEqual(summary["threshold_profile"]["hybrid_meta"]["type"], "logistic_regression")
+
     def test_zero_day_vote_decision_requires_multiple_signals(self):
         from inference_runtime import zero_day_decision
 
@@ -706,21 +930,26 @@ class CoreSmokeTests(unittest.TestCase):
             def forward(self, x):
                 return torch.stack([x[:, 1], x[:, 2]], dim=1)
 
-        raw = torch.tensor([[0.8, 0.1, 2.0], [0.1, 2.0, 0.1]], dtype=torch.float32).numpy()
+        raw = torch.tensor(
+            [[0.8, 0.1, 2.0], [0.1, 2.0, 0.1], [0.4, 1.8, 0.2]],
+            dtype=torch.float32,
+        ).numpy()
         result = run_batch_inference(
             TinyModel(),
             IdentityScaler(),
             raw,
             ["Normal", "DoS"],
             thresholds={"decision_mode": "vote", "min_votes": 2, "hybrid": 0.2, "ae_re": 0.5},
-            batch_size=1,
+            batch_size=2,
         )
 
-        self.assertEqual(len(result), 2)
-        self.assertEqual(result["classifier_class"].tolist(), ["DoS", "Normal"])
-        self.assertEqual(result["predicted_class"].tolist(), ["Zero-Day Candidate", "Normal"])
-        self.assertEqual(result["is_zeroday"].tolist(), [True, False])
+        self.assertEqual(len(result), 3)
+        self.assertEqual(result["classifier_class"].tolist(), ["DoS", "Normal", "Normal"])
+        self.assertEqual(result["predicted_class"].tolist(), ["Zero-Day Candidate", "Normal", "Normal"])
+        self.assertEqual(result["is_zeroday"].tolist(), [True, False, False])
         self.assertEqual(result["zero_day_rule"].iloc[0], "vote_2_of_2")
+        np.testing.assert_allclose(result["ae_score"].to_numpy(), [0.8, 0.1, 0.4], rtol=1e-6)
+        self.assertTrue(all(np.isscalar(value) for value in result["ae_score"]))
 
     def test_predict_with_uncertainty_uses_mc_dropout_contract(self):
         from ids.evaluator import predict_with_uncertainty
@@ -834,6 +1063,20 @@ class CoreSmokeTests(unittest.TestCase):
         self.assertEqual(tuple(logits.shape), (2, checkpoint["n_classes"]))
         self.assertEqual(features.shape[0], 2)
         self.assertEqual(tuple(ae_score.shape), (2,))
+
+    def test_v15_artifacts_load_when_present(self):
+        model_path = os.path.join(ROOT_DIR, "checkpoints", "ids_v15_model.pth")
+        pipeline_path = os.path.join(ROOT_DIR, "checkpoints", "ids_v15_pipeline.pkl")
+        if not (os.path.exists(model_path) and os.path.exists(pipeline_path)):
+            self.skipTest("v15 checkpoint/pipeline artifacts are not present")
+
+        from batch_evaluator import load_ids_artifacts
+
+        artifacts = load_ids_artifacts(model_path, pipeline_path, "v15")
+
+        self.assertEqual(artifacts.checkpoint["n_features"], len(artifacts.feature_names))
+        self.assertEqual(artifacts.checkpoint["n_classes"], len(artifacts.class_names))
+        self.assertTrue(artifacts.thresholds)
 
     def test_ids_model_forward_shapes(self):
         from ids.models import IDSModel

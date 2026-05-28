@@ -186,14 +186,14 @@ def _technique(tech_id: str, confidence: float, rationale: str, evidence=None) -
         "tactic": base["tactic"],
         "confidence": round(float(confidence), 2),
         "rationale": rationale,
-        "evidence": evidence or [],
+        "evidence": list(evidence) if evidence else [],
         "response_actions": base["response"],
         "url": f"https://attack.mitre.org/techniques/{tech_id}/",
     }
 
 
 def _dedupe_rank(techniques: list[dict]) -> list[dict]:
-    best = {}
+    best: dict[str, dict] = {}
     for technique in techniques:
         existing = best.get(technique["id"])
         if existing is None or technique["confidence"] > existing["confidence"]:
@@ -260,7 +260,7 @@ class MITREMapper:
 
     def _map_features(self, top_features) -> list[dict]:
         names = _feature_names(top_features)
-        techniques = []
+        techniques: list[dict] = []
         if not names:
             return techniques
         for feature_set, candidates in FEATURE_RULES:

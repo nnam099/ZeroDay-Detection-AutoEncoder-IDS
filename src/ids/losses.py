@@ -80,11 +80,14 @@ class SupConLoss(nn.Module):
 class IDSLoss(nn.Module):
     def __init__(self, n_classes, lambda_con=0.3, focal_gamma=2.0,
                  dos_class_idx=None, dos_weight=5.0, recon_class_idx=None,
-                 recon_dos_penalty=2.0, n_features=None, device='cpu'):
+                 recon_dos_penalty=2.0, class_weight_overrides=None,
+                 n_features=None, device='cpu'):
         super().__init__()
         w = torch.ones(n_classes, device=device)
         if dos_class_idx is not None:
             w[dos_class_idx] = dos_weight
+        for class_idx, multiplier in (class_weight_overrides or {}).items():
+            w[int(class_idx)] = float(multiplier)
         w = w / w.mean()
         self.focal = FocalLoss(n_classes, gamma=focal_gamma,
                                label_smooth=0.05, class_weights=w.to(device),

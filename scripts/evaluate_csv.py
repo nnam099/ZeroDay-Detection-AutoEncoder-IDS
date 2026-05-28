@@ -23,6 +23,12 @@ from batch_evaluator import (  # noqa: E402
 )
 
 
+def configure_console_encoding() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate IDS zero-day behavior on a CSV file.")
     parser.add_argument("csv_path", help="Path to a UNSW/CICIDS/firewall/flow CSV file.")
@@ -43,6 +49,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    configure_console_encoding()
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
     stem = args.name or os.path.splitext(os.path.basename(args.csv_path))[0]
@@ -51,7 +58,14 @@ def main() -> int:
     artifacts = load_ids_artifacts(args.model_path, args.pipeline_path, args.model_version)
     raw_features, normalization_report = preprocess_raw_df(raw_df, artifacts)
     scores = run_batch_scores(raw_features, artifacts, batch_size=args.batch_size)
-    summary = summarize_scores(scores, raw_df=raw_df, label_col=args.label_col)
+    summary = summarize_scores(
+        scores,
+        raw_df=raw_df,
+        label_col=args.label_col,
+        class_names=artifacts.class_names,
+        zero_day_labels=list(artifacts.pipeline.get("zd_cats", [])),
+        thresholds=artifacts.thresholds,
+    )
     summary["input_csv"] = os.path.abspath(args.csv_path)
     summary["model_path"] = os.path.abspath(args.model_path)
     summary["pipeline_path"] = os.path.abspath(args.pipeline_path)

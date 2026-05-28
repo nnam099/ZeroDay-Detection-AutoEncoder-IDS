@@ -3,7 +3,7 @@ name = "zeroday-detection-autoencoder-ids"
 version = "0.1.0"
 description = "Research IDS prototype for UNSW-NB15 zero-day/OOD detection."
 readme = "README.md"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.11,<3.13"
 license = { text = "MIT" }
 
 [tool.ruff]
