@@ -19,6 +19,14 @@ from batch_evaluator import load_ids_artifacts, preprocess_raw_df, run_batch_sco
 from inference_runtime import ground_truth_verdict, zero_day_decision  # noqa: E402
 
 
+def display_path(path: str | Path) -> str:
+    resolved = Path(path).resolve()
+    try:
+        return resolved.relative_to(ROOT_DIR).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Regenerate v14 artifact evaluation metrics and plots.")
     parser.add_argument("--csv-path", default=str(ROOT_DIR / "data" / "UNSW_NB15_testing-set.csv"))
@@ -72,9 +80,9 @@ def main() -> int:
         "status": "artifact_evaluation_regenerated",
         "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "regeneration_mode": "current_artifact_evaluation",
-        "input_csv": str(Path(args.csv_path).resolve()),
-        "model_path": str(Path(args.model_path).resolve()),
-        "pipeline_path": str(Path(args.pipeline_path).resolve()),
+        "input_csv": display_path(args.csv_path),
+        "model_path": display_path(args.model_path),
+        "pipeline_path": display_path(args.pipeline_path),
         "n_features": len(artifacts.feature_names),
         "n_classes": len(artifacts.class_names),
         "known_cats": list(artifacts.pipeline.get("known_cats", [])),
@@ -118,7 +126,7 @@ def write_evaluation_plots(scores: pd.DataFrame, summary: dict, plots_dir: Path)
     fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
-    paths.append(str(path))
+    paths.append(display_path(path))
 
     fig, ax = plt.subplots(figsize=(7, 4))
     scores[["hybrid", "ae_re", "softmax"]].plot(kind="box", ax=ax)
@@ -128,14 +136,16 @@ def write_evaluation_plots(scores: pd.DataFrame, summary: dict, plots_dir: Path)
     fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
-    paths.append(str(path))
+    paths.append(display_path(path))
 
     recall = summary.get("recall_per_class") or {}
     if recall:
-        recall_df = pd.DataFrame([
-            {"Class": key, "Recall": value.get("recall", 0.0), "Support": value.get("support", 0)}
-            for key, value in recall.items()
-        ]).sort_values("Class")
+        recall_df = pd.DataFrame(
+            [
+                {"Class": key, "Recall": value.get("recall", 0.0), "Support": value.get("support", 0)}
+                for key, value in recall.items()
+            ]
+        ).sort_values("Class")
         fig, ax = plt.subplots(figsize=(8, 4))
         ax.bar(recall_df["Class"], recall_df["Recall"], color="#42d392")
         ax.set_ylim(0, 1.0)
@@ -147,7 +157,7 @@ def write_evaluation_plots(scores: pd.DataFrame, summary: dict, plots_dir: Path)
         fig.tight_layout()
         fig.savefig(path, dpi=160)
         plt.close(fig)
-        paths.append(str(path))
+        paths.append(display_path(path))
 
     return paths
 
@@ -178,16 +188,16 @@ def calibrated_threshold_summary(
     normal_mask = truth == "Normal"
     zd_mask = labels.isin(set(zero_day_labels))
     return {
-        "profile_path": str(Path(profile_path).resolve()),
+        "profile_path": display_path(profile_path),
         "target_fpr": profile.get("target_fpr"),
         "reference_rows": profile.get("reference_rows"),
         "decision_rule": rule,
         "zero_day_count": int(decisions.sum()),
         "zero_day_rate": round(float(decisions.mean()), 6),
         "normal_false_positive_rate": round(float(decisions.loc[normal_mask.values].mean()), 6)
-        if bool(normal_mask.any()) else None,
-        "ood_detection_rate": round(float(decisions.loc[zd_mask.values].mean()), 6)
-        if bool(zd_mask.any()) else None,
+        if bool(normal_mask.any())
+        else None,
+        "ood_detection_rate": round(float(decisions.loc[zd_mask.values].mean()), 6) if bool(zd_mask.any()) else None,
         "thresholds": thresholds,
         "tradeoff_note": "Lower FPR can reduce OOD recall; validate the chosen target_fpr against analyst capacity.",
     }

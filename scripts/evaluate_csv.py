@@ -23,6 +23,14 @@ from batch_evaluator import (  # noqa: E402
 )
 
 
+def display_path(path: str) -> str:
+    abs_path = os.path.abspath(path)
+    try:
+        return os.path.relpath(abs_path, ROOT_DIR).replace(os.sep, "/")
+    except ValueError:
+        return abs_path
+
+
 def configure_console_encoding() -> None:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -43,7 +51,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scores-csv", action="store_true", help="Also write row-level score CSV.")
     parser.add_argument("--calibrate-thresholds", action="store_true", help="Write a threshold profile from this CSV.")
     parser.add_argument("--target-fpr", type=float, default=0.01)
-    parser.add_argument("--all-reference-rows", action="store_true", help="Calibrate from all rows instead of Normal rows only.")
+    parser.add_argument(
+        "--all-reference-rows", action="store_true", help="Calibrate from all rows instead of Normal rows only."
+    )
     parser.add_argument("--threshold-output", default=os.path.join(ROOT_DIR, "checkpoints", "local_thresholds.json"))
     return parser.parse_args()
 
@@ -66,9 +76,9 @@ def main() -> int:
         zero_day_labels=list(artifacts.pipeline.get("zd_cats", [])),
         thresholds=artifacts.thresholds,
     )
-    summary["input_csv"] = os.path.abspath(args.csv_path)
-    summary["model_path"] = os.path.abspath(args.model_path)
-    summary["pipeline_path"] = os.path.abspath(args.pipeline_path)
+    summary["input_csv"] = display_path(args.csv_path)
+    summary["model_path"] = display_path(args.model_path)
+    summary["pipeline_path"] = display_path(args.pipeline_path)
     summary["normalization_report"] = normalization_report
     summary["active_thresholds"] = artifacts.thresholds
 

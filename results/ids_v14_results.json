@@ -3,7 +3,7 @@
     "decision_rule": "vote_2_of_3",
     "normal_false_positive_rate": 0.046964,
     "ood_detection_rate": 0.055392,
-    "profile_path": "D:\\K\u00ec 2 N\u0103m 3\\Th\u1ef1c T\u1eadp C\u01a1 S\u1edf\\AI_Train\\ZeroDay-Detection-AutoEncoder-IDS\\checkpoints\\local_thresholds.json",
+    "profile_path": "checkpoints/local_thresholds.json",
     "reference_rows": 56000,
     "target_fpr": 0.05,
     "thresholds": {
@@ -18,7 +18,7 @@
     "zero_day_count": 5688,
     "zero_day_rate": 0.03244
   },
-  "input_csv": "D:\\K\u00ec 2 N\u0103m 3\\Th\u1ef1c T\u1eadp C\u01a1 S\u1edf\\AI_Train\\ZeroDay-Detection-AutoEncoder-IDS\\data\\UNSW_NB15_testing-set.csv",
+  "input_csv": "data/UNSW_NB15_testing-set.csv",
   "known_cats": [
     "Normal",
     "DoS",
@@ -183,7 +183,7 @@
     "zero_day_count": 42834,
     "zero_day_rate": 0.24429
   },
-  "model_path": "D:\\K\u00ec 2 N\u0103m 3\\Th\u1ef1c T\u1eadp C\u01a1 S\u1edf\\AI_Train\\ZeroDay-Detection-AutoEncoder-IDS\\checkpoints\\ids_v14_model.pth",
+  "model_path": "checkpoints/ids_v14_model.pth",
   "n_classes": 5,
   "n_features": 61,
   "normalization_report": {
@@ -230,11 +230,11 @@
     "rows": 175341,
     "schema": "unsw_nb15"
   },
-  "pipeline_path": "D:\\K\u00ec 2 N\u0103m 3\\Th\u1ef1c T\u1eadp C\u01a1 S\u1edf\\AI_Train\\ZeroDay-Detection-AutoEncoder-IDS\\checkpoints\\ids_v14_pipeline.pkl",
+  "pipeline_path": "checkpoints/ids_v14_pipeline.pkl",
   "plots": [
-    "plots\\v14_eval_verdict_distribution.png",
-    "plots\\v14_eval_score_distribution.png",
-    "plots\\v14_eval_known_class_recall.png"
+    "plots/v14_eval_verdict_distribution.png",
+    "plots/v14_eval_score_distribution.png",
+    "plots/v14_eval_known_class_recall.png"
   ],
   "regeneration_mode": "current_artifact_evaluation",
   "status": "artifact_evaluation_regenerated",
