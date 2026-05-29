@@ -21,6 +21,9 @@ env/
 
 # Local model/data artifacts
 checkpoints/
+!checkpoints/
+!checkpoints/ids_v14_model.pth
+!checkpoints/ids_v14_pipeline.pkl
 data/*
 !data/README.md
 !data/samples/

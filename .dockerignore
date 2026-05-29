@@ -20,6 +20,9 @@ data/*
 !data/samples/*.csv
 !data/samples/README.md
 checkpoints/
+!checkpoints/
+!checkpoints/ids_v14_model.pth
+!checkpoints/ids_v14_pipeline.pkl
 notebooks/
 new/
 plots/

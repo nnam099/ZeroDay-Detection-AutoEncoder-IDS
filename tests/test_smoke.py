@@ -7,6 +7,8 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pandas as pd
 import numpy as np
@@ -257,6 +259,44 @@ class CoreSmokeTests(unittest.TestCase):
 
         self.assertTrue(python_version_status((3, 11, 9))["supported"])
         self.assertFalse(python_version_status((3, 13, 0))["supported"])
+
+    def test_resolve_paths_keeps_existing_kaggle_paths(self):
+        from ids.config import resolve_paths
+
+        cfg = SimpleNamespace(
+            data_dir="/kaggle/input",
+            save_dir="/kaggle/working/checkpoints_v14",
+            plot_dir="/kaggle/working/plots_v14",
+        )
+
+        def exists(path):
+            return path in {"/kaggle/input", "/kaggle/working"}
+
+        with patch("ids.config.os.path.exists", side_effect=exists):
+            resolved = resolve_paths(cfg)
+
+        self.assertEqual(resolved.data_dir, "/kaggle/input")
+        self.assertEqual(resolved.save_dir, "/kaggle/working/checkpoints_v14")
+        self.assertEqual(resolved.plot_dir, "/kaggle/working/plots_v14")
+
+    def test_resolve_paths_falls_back_to_local_outside_kaggle(self):
+        from ids.config import resolve_paths
+
+        cfg = SimpleNamespace(
+            data_dir="/missing/kaggle/input",
+            save_dir="/kaggle/working/checkpoints_v14",
+            plot_dir="/kaggle/working/plots_v14",
+        )
+
+        def exists(path):
+            return os.path.basename(path) == "data"
+
+        with patch("ids.config.os.path.exists", side_effect=exists):
+            resolved = resolve_paths(cfg)
+
+        self.assertTrue(resolved.data_dir.endswith(os.path.join("ZeroDay-Detection-AutoEncoder-IDS", "data")))
+        self.assertTrue(resolved.save_dir.endswith(os.path.join("ZeroDay-Detection-AutoEncoder-IDS", "checkpoints")))
+        self.assertTrue(resolved.plot_dir.endswith(os.path.join("ZeroDay-Detection-AutoEncoder-IDS", "plots")))
 
     def test_environment_check_configures_utf8_console_output(self):
         from scripts.check_environment import configure_console_encoding

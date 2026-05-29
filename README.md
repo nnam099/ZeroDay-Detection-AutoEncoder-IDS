@@ -27,7 +27,7 @@ Main flow:
 - `llm_agent.py` lazy-loads provider clients, so importing dashboard code does not require an API key.
 - A Windows GitHub Actions smoke workflow is available at `.github/workflows/smoke.yml`.
 - A Dockerfile is available for FastAPI inference on port `8080`.
-- v14 artifact evaluation has been regenerated from the current saved artifacts on `UNSW_NB15_testing-set.csv`; `results/ids_v14_results.json` includes accuracy, per-class recall, OOD detection rate, false-positive rate and threshold profile. Current normal false-positive rate is high, so threshold calibration remains a priority before operational use.
+- v14 artifact evaluation has been regenerated from Kaggle-trained artifacts on `UNSW_NB15_testing-set.csv`; `results/ids_v14_results.json` reports `91.52%` detection accuracy, `3.98%` normal false-positive rate, `33.27%` OOD detection rate and the active threshold profile.
 
 ## Features
 
@@ -173,10 +173,10 @@ data/
 - Runtime packages are pinned in `requirements.txt`; test-only packages are pinned in `requirements-dev.txt`.
 - v14 training defaults to seed `42`. Override it with `--seed` when running `train.py` or `src/ids_v14_unswnb15.py`.
 - Data splits, PyTorch, NumPy, Python hashing and DataLoader workers are seeded through `seed_everything()` and seeded worker initialization.
-- Local artifacts are intentionally not committed: `checkpoints/*.pth`, `checkpoints/*.pkl`, CSV datasets and SQLite files can be large or environment-specific.
-- Use `scripts/artifact_manifest.py` after training to record local artifact hashes.
+- The Kaggle-trained v14 demo artifacts are committed under `checkpoints/` so the dashboard/API can run after clone. Additional retrained checkpoints, CSV datasets and SQLite files remain ignored because they can be large or environment-specific.
+- Use `scripts/artifact_manifest.py` after retraining to record local artifact hashes.
 
-Pretrained artifacts are not currently published in this repository. For demos, train/export artifacts locally or attach a trusted release asset, Hugging Face artifact, Google Drive file or internal model registry object, then point runtime tools at it with `IDS_MODEL_PATH` and `IDS_PIPELINE_PATH`.
+For production-like deployments, prefer publishing signed artifacts through a release, Hugging Face artifact, Google Drive file or internal model registry object, then point runtime tools at it with `IDS_MODEL_PATH` and `IDS_PIPELINE_PATH`.
 
 ## Run Dashboard
 
@@ -302,14 +302,10 @@ Docker:
 
 ```bash
 docker build -t ids-v14-serve .
-docker run --rm -p 8080:8080 \
-  -v "$(pwd)/checkpoints:/app/checkpoints:ro" \
-  -e IDS_MODEL_PATH=/app/checkpoints/ids_v14_model.pth \
-  -e IDS_PIPELINE_PATH=/app/checkpoints/ids_v14_pipeline.pkl \
-  ids-v14-serve
+docker run --rm -p 8080:8080 ids-v14-serve
 ```
 
-Local checkpoint files are ignored by git and excluded by `.dockerignore`, so mount artifacts into the container or copy them into a deployment-specific image.
+The image includes the tracked v14 demo artifacts by default. For deployment-specific artifacts, mount a trusted `checkpoints/` directory and override `IDS_MODEL_PATH` and `IDS_PIPELINE_PATH`.
 
 ## Train
 
@@ -364,13 +360,12 @@ Training outputs:
 ### Kaggle Retraining
 
 On Kaggle, upload this repository as a working notebook dataset or clone it into
-`/kaggle/working`, then attach UNSW-NB15/CICIDS datasets as Kaggle inputs. Copy
-or symlink the CSV files into one training directory before running:
+`/kaggle/working`, then attach UNSW-NB15/CICIDS datasets as Kaggle inputs:
 
 ```bash
 cd /kaggle/working/ZeroDay-Detection-AutoEncoder-IDS
 python train.py \
-  --data_dir /kaggle/working/data \
+  --data_dir /kaggle/input/datasets/mrwellsdavid/unsw-nb15 \
   --save_dir /kaggle/working/checkpoints \
   --plot_dir /kaggle/working/plots \
   --target_fpr 0.01
@@ -414,7 +409,7 @@ python -m ruff check .
 | Symptom | Check |
 | --- | --- |
 | `IDS_MODEL_PATH must be set` | Set `IDS_MODEL_PATH` and `IDS_PIPELINE_PATH` before starting `uvicorn src.serve:app`. |
-| `expected N features, received M` | Send exactly the feature count saved in the checkpoint/pipeline; current local v14 artifacts use 61 features. |
+| `expected N features, received M` | Send exactly the feature count saved in the checkpoint/pipeline; current local v14 artifacts use 66 features. |
 | Dashboard starts in demo mode | Confirm `checkpoints/ids_v14_model.pth` and `checkpoints/ids_v14_pipeline.pkl` exist or set explicit artifact paths. |
 | Too many zero-day candidates on a new CSV | Run `scripts/evaluate_csv.py --calibrate-thresholds` on labeled benign rows and load the generated threshold profile. |
 | Import or console encoding errors on Windows paths | Set `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8`; `scripts/smoke_check.py` already does this for subprocesses. |
@@ -434,8 +429,8 @@ This refreshes `results/ids_v14_results.json` and writes evaluation plots in `pl
 - `v14_eval_score_distribution.png`
 - `v14_eval_known_class_recall.png`
 
-The report includes detection accuracy, known-class recall, OOD detection rate, normal false-positive rate and the active threshold profile. A high false-positive rate means the current thresholds need recalibration before using the model for operational alerting.
-If `checkpoints/local_thresholds.json` exists, the report also includes a calibrated-threshold what-if section. With `target_fpr=0.05` on the current test CSV, the local vote profile reduces normal FPR to about `4.70%`, but OOD detection drops to about `5.54%`, so this is a precision/recall tradeoff rather than a free improvement.
+The report includes detection accuracy, known-class recall, OOD detection rate, normal false-positive rate and the active threshold profile. The current Kaggle-trained v14 artifacts use 66 features and report about `91.52%` detection accuracy, `3.98%` normal false-positive rate and `33.27%` OOD detection rate on `UNSW_NB15_testing-set.csv`.
+If `checkpoints/local_thresholds.json` exists, the report also includes a calibrated-threshold what-if section. Keep this file local and regenerate it for the active model; stale threshold profiles from older artifacts can override the saved thresholds in the dashboard.
 
 ## Evaluate and Calibrate CSV Drift
 
@@ -542,7 +537,7 @@ For demo and runtime procedures, see [docs/operations.md](docs/operations.md).
 
 - MITRE mapping is heuristic and should be treated as triage support.
 - `Zero-Day Candidate` means the row crossed OOD/anomaly rules and needs analyst review. It is not proof of a novel attack, attribution or compromise.
-- Zero-day results depend strongly on feature quality, scaler compatibility and threshold calibration. The regenerated v14 artifact report currently shows a high normal false-positive rate, so recalibrate thresholds before operational demos that claim realistic SOC precision.
+- Zero-day results depend strongly on feature quality, scaler compatibility and threshold calibration. Recalibrate thresholds on representative benign traffic before operational demos that claim realistic SOC precision.
 - Real-world CSV normalization is approximate when directional counters or timing fields are missing.
 - LLM triage is optional decision support and must not be treated as the detection engine or a final verdict.
 - v15 is experimental until v15 artifacts are trained/exported and smoke-tested.

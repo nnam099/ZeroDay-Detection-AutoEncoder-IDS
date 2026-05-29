@@ -48,12 +48,18 @@ def resolve_paths(cfg):
     if getattr(cfg, 'data_dir', None):
         if (not os.path.exists(cfg.data_dir)) and os.path.exists(local_data):
             cfg.data_dir = local_data
-        if str(cfg.data_dir).startswith('/kaggle/') and os.path.exists(local_data):
-            cfg.data_dir = local_data
 
-    if getattr(cfg, 'save_dir', None) and str(cfg.save_dir).startswith('/kaggle/'):
+    if (
+        getattr(cfg, 'save_dir', None)
+        and str(cfg.save_dir).startswith('/kaggle/')
+        and not os.path.exists('/kaggle/working')
+    ):
         cfg.save_dir = local_ckpt
-    if getattr(cfg, 'plot_dir', None) and str(cfg.plot_dir).startswith('/kaggle/'):
+    if (
+        getattr(cfg, 'plot_dir', None)
+        and str(cfg.plot_dir).startswith('/kaggle/')
+        and not os.path.exists('/kaggle/working')
+    ):
         cfg.plot_dir = local_plot
     return cfg
 

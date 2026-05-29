@@ -3,7 +3,9 @@ FROM python:3.11-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONUTF8=1 \
     PYTHONIOENCODING=utf-8 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    IDS_MODEL_PATH=/app/checkpoints/ids_v14_model.pth \
+    IDS_PIPELINE_PATH=/app/checkpoints/ids_v14_pipeline.pkl
 
 WORKDIR /app
 
