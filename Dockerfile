@@ -14,7 +14,12 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install --progress-bar off -r requirements.txt
 
 COPY . .
+RUN useradd --create-home --shell /usr/sbin/nologin appuser \
+    && mkdir -p /app/results \
+    && chown -R appuser:appuser /app/results
 
 EXPOSE 8080
+
+USER appuser
 
 CMD ["uvicorn", "src.serve:app", "--host", "0.0.0.0", "--port", "8080"]

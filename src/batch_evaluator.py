@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from artifact_validator import validate_artifact_contract
 from inference_runtime import (
     ground_truth_verdict,
     hybrid_score_from_meta,
@@ -40,6 +41,7 @@ def load_ids_artifacts(model_path: str, pipeline_path: str, model_version: str =
     checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
     with open(pipeline_path, "rb") as handle:
         pipeline = pickle.load(handle)
+    validate_artifact_contract(checkpoint, pipeline).raise_for_errors()
 
     kwargs = {
         "n_features": checkpoint["n_features"],
