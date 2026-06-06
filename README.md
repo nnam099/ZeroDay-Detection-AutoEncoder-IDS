@@ -22,10 +22,11 @@ Main flow:
 
 - v14 is the operational default because local artifacts exist in `checkpoints/`.
 - Runtime dependencies are pinned in `requirements.txt`; smoke-check dependency ranges are in `requirements-smoke.txt`; developer tooling is in `requirements-dev.txt`.
-- `scripts/smoke_check.py` passes locally with 54 tests, with the v15 artifact smoke test skipped until v15 artifacts exist.
+- `scripts/smoke_check.py` passes locally with 57 tests, with the v15 artifact smoke test skipped until v15 artifacts exist.
 - Smoke coverage includes artifact contract validation, threshold metadata validation, artifact manifest hashing, duplicate feature-name rejection, environment readiness checks, export config handling, checkpoint metadata patch logic, SQLite alert store persistence, CSV input guardrails, CSV normalization quality checks, dashboard preprocessing/context contracts, dashboard UI helper contracts, AI context selection, alert queue filtering, top-N batch alert selection, alert entity enrichment, lightweight correlation, time-window incident grouping, labeled evaluation reporting, API edge cases, Recon/DoS prototype separation, LLM fallback behavior, MITRE mapping and v14 artifact loading.
 - `llm_agent.py` lazy-loads provider clients, so importing dashboard code does not require an API key.
 - A Windows GitHub Actions smoke workflow is available at `.github/workflows/smoke.yml`.
+- A scheduled and PR-triggered dependency audit workflow is available at `.github/workflows/dependency-audit.yml`.
 - A Dockerfile is available for FastAPI inference on port `8080`.
 - v14 artifact evaluation has been regenerated from Kaggle-trained artifacts on `UNSW_NB15_testing-set.csv`; `results/ids_v14_results.json` reports `91.52%` detection accuracy, `3.98%` normal false-positive rate, `33.27%` OOD detection rate and the active threshold profile.
 
@@ -79,6 +80,7 @@ docs/
   architecture.md
   operations.md
   real_world_csv.md
+  roadmap_real_world.md
   project_audit.md
 tests/
   test_smoke.py
@@ -89,6 +91,8 @@ scripts/
   quality_check.ps1
   run_dashboard.ps1
   evaluate_csv.py
+  evaluate_baselines.py
+  drift_report.py
   regenerate_v14_report.py
   train_v14.ps1
   train_v15.ps1
@@ -404,6 +408,15 @@ Run lint only:
 python -m ruff check .
 ```
 
+Run dependency audit locally when `pip-audit` is available:
+
+```powershell
+python -m pip install --progress-bar off pip-audit
+python -m pip_audit -r requirements.txt
+python -m pip_audit -r requirements-smoke.txt
+python -m pip_audit -r requirements-dev.txt
+```
+
 ## Troubleshooting
 
 | Symptom | Check |
@@ -466,6 +479,31 @@ python scripts/regenerate_v14_report.py --csv-path data\UNSW_NB15_testing-set.cs
 ```
 
 The dashboard loads `checkpoints/local_thresholds.json` automatically. Keep this file local unless you intentionally publish a calibrated deployment profile.
+
+## Practical Readiness Automation
+
+Use the real-world roadmap in [docs/roadmap_real_world.md](docs/roadmap_real_world.md) to move beyond UNSW-NB15-only evaluation. Several steps are automated and can be run as soon as you have a CSV export.
+
+Compare the saved IDS scores against classical anomaly-detection baselines:
+
+```powershell
+python scripts/evaluate_baselines.py data\UNSW_NB15_testing-set.csv `
+  --label-col attack_cat `
+  --target-fpr 0.05 `
+  --scores-csv
+```
+
+This writes a baseline report under `results/baseline_eval/` with IDS hybrid, AE-only, softmax-confidence, Isolation Forest, Local Outlier Factor and One-Class SVM comparisons.
+
+Check score and normalization drift before trusting a new environment or dataset:
+
+```powershell
+python scripts/drift_report.py "path\to\new_environment.csv" `
+  --label-col Label `
+  --scores-csv
+```
+
+This writes a drift report under `results/drift/` and recommends recalibration when feature coverage, score distributions or zero-day candidate rates shift materially from the saved v14 reference report.
 
 ## Prepare Production Flow Data
 
