@@ -19,7 +19,8 @@ class FocalLoss(nn.Module):
     def forward(self, logits, labels):
         ce   = F.cross_entropy(logits, labels, reduction='none',
                                label_smoothing=self.ls, weight=self.w)
-        pt   = torch.exp(-ce)
+        log_probs = F.log_softmax(logits, dim=-1)
+        pt = log_probs.gather(1, labels.view(-1, 1)).squeeze(1).exp()
         loss = (1-pt)**self.gamma * ce
         if self.dos_idx is not None and self.recon_idx is not None:
             preds = logits.argmax(dim=1)

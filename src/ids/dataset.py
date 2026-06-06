@@ -226,16 +226,6 @@ def prepare_splits(df, known_cats=KNOWN_ATTACK_CATS, zd_cats=ZERO_DAY_ATTACK_CAT
     print(f'\n  Known  {len(act_known)} classes: {len(df_known):,} samples')
     print(f'  ZD     {len(act_zd)} classes: {len(df_zd_full):,} samples')
 
-    feat_cols, categorical_maps = _get_numeric_features(df_known)
-    df_known, feat_cols = engineer_features(df_known, feat_cols)
-    zd_feat_cols, _     = _get_numeric_features(df_zd_full, categorical_maps)
-    df_zd_full, _       = engineer_features(df_zd_full, zd_feat_cols)
-    feat_cols = [c for c in feat_cols if c in df_zd_full.columns]
-
-    std = df_known[feat_cols].std()
-    feat_cols = [c for c in feat_cols if std[c] > 1e-8]
-    print(f'  Features: {len(feat_cols)}')
-
     le = LabelEncoder()
     le.fit(act_known)
     df_known['y'] = le.transform(df_known['attack_cat'])
@@ -253,6 +243,20 @@ def prepare_splits(df, known_cats=KNOWN_ATTACK_CATS, zd_cats=ZERO_DAY_ATTACK_CAT
 
     print(f'  Train {len(idx_tr):,} | Val {len(idx_va):,} | Test {len(idx_te):,}')
     print(f'  ZD pool: {len(df_zd_full):,}')
+
+    df_train_view = df_known.loc[idx_tr].copy()
+    base_feat_cols, categorical_maps = _get_numeric_features(df_train_view)
+    df_train_view, engineered_feat_cols = engineer_features(df_train_view, base_feat_cols.copy())
+
+    std = df_train_view[engineered_feat_cols].std()
+    feat_cols = [c for c in engineered_feat_cols if std[c] > 1e-8]
+
+    _encode_categorical_features(df_known, categorical_maps)
+    _encode_categorical_features(df_zd_full, categorical_maps)
+    df_known, _ = engineer_features(df_known, base_feat_cols.copy())
+    df_zd_full, _ = engineer_features(df_zd_full, base_feat_cols.copy())
+    feat_cols = [c for c in feat_cols if c in df_known.columns and c in df_zd_full.columns]
+    print(f'  Features: {len(feat_cols)}')
 
     scaler  = RobustScaler()
     X_tr    = scaler.fit_transform(df_known.loc[idx_tr,feat_cols].values.astype(np.float32))
@@ -325,6 +329,11 @@ def make_loaders(splits, batch_size=512, num_workers=2,
         worker_init_fn=_seed_worker,
         generator=gen,
     )
+    if num_workers > 0:
+        kw.update(
+            persistent_workers=True,
+            prefetch_factor=2,
+        )
     return {
         'train': DataLoader(tr_ds, batch_size=batch_size, sampler=sampler, **kw),
         'val':   DataLoader(va_ds, batch_size=batch_size, shuffle=False, **kw),
