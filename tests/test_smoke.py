@@ -145,6 +145,33 @@ class CoreSmokeTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
 
+    def test_artifact_validator_rejects_invalid_vote_threshold_controls(self):
+        from artifact_validator import validate_artifact_contract
+
+        scaler = RobustScaler().fit([[0, 1, 2], [3, 4, 5]])
+        label_encoder = LabelEncoder().fit(["Normal", "DoS"])
+        result = validate_artifact_contract(
+            {
+                "model_state_dict": {},
+                "n_features": 3,
+                "n_classes": 2,
+                "thresholds": {
+                    "decision_mode": "vote",
+                    "min_votes": -1,
+                    "hybrid": 0.5,
+                    "ae_re": 0.8,
+                },
+            },
+            {
+                "scaler": scaler,
+                "label_encoder": label_encoder,
+                "feature_names": ["dur", "sbytes", "dbytes"],
+            },
+        )
+
+        self.assertFalse(result.ok)
+        self.assertTrue(any("thresholds.min_votes must be positive" in err for err in result.errors))
+
     def test_patch_checkpoint_infers_dims_from_state_dict(self):
         from patch_checkpoint import infer_dims
 
@@ -376,6 +403,17 @@ class CoreSmokeTests(unittest.TestCase):
             self.assertEqual(rows[0]["status"], "false_positive")
             self.assertEqual(rows[0]["analyst_note"], "benign scan")
 
+    def test_alert_store_rejects_missing_alert_status_update(self):
+        from alert_store import list_alerts, update_alert_status
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = os.path.join(tmp, "alerts.sqlite3")
+
+            with self.assertRaisesRegex(ValueError, "alert not found: A-404"):
+                update_alert_status(db_path, "A-404", "closed", "stale selection")
+
+            self.assertEqual(list_alerts(db_path), [])
+
     def test_log_normalizer_maps_common_firewall_csv(self):
         from log_normalizer import normalize_real_world_logs
 
@@ -524,6 +562,9 @@ class CoreSmokeTests(unittest.TestCase):
         decision, rule = zero_day_decision(0.1, 0.9, 0.4, thresholds={"hybrid": 0.3})
         self.assertTrue(bool(decision))
         self.assertEqual(rule, "hybrid_calibrated")
+
+        with self.assertRaisesRegex(ValueError, "min_votes must be positive"):
+            zero_day_decision(0.8, 0.4, 0.7, thresholds={"decision_mode": "vote", "min_votes": 0, "hybrid": 0.5})
 
         self.assertEqual(traffic_verdict(True, "Normal"), "Zero-Day Candidate")
         self.assertEqual(traffic_verdict(False, "Normal"), "Normal")

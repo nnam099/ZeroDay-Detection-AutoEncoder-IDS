@@ -37,6 +37,8 @@ def zero_day_decision(
 ):
     if thresholds and thresholds.get("decision_mode") == "vote":
         min_votes = int(thresholds.get("min_votes", 2))
+        if min_votes <= 0:
+            raise ValueError("vote threshold min_votes must be positive")
         votes = []
         if "hybrid" in thresholds:
             votes.append(np.asarray(hybrid_score) > float(thresholds["hybrid"]))
