@@ -96,7 +96,7 @@ def validate_artifact_contract(checkpoint: dict[str, Any], pipeline: dict[str, A
             "fv_cluster",
             "knn_dist",
         }
-        control_keys = {"decision_mode", "hybrid_meta"}
+        control_keys = {"decision_mode", "hybrid_meta", "min_votes"}
         for key, value in thresholds.items():
             if key in control_keys:
                 continue
@@ -109,7 +109,12 @@ def validate_artifact_contract(checkpoint: dict[str, Any], pipeline: dict[str, A
                 result.errors.append(f"thresholds.{key} must be finite")
             if key in non_negative_thresholds and numeric_value < 0:
                 result.errors.append(f"thresholds.{key} must be non-negative")
-        if not any(k in thresholds for k in ("hybrid", "ae_re", "vae_recon", "ood_ensemble")):
+        if thresholds.get("decision_mode") == "vote":
+            _positive_int_control(thresholds.get("min_votes", 2), "thresholds.min_votes", result)
+            if not any(k in thresholds for k in ("hybrid", "ae_re", "softmax")):
+                result.errors.append("vote thresholds require at least one of: hybrid, ae_re, softmax")
+
+        if not any(k in thresholds for k in ("hybrid", "ae_re", "vae_recon", "ood_ensemble", "softmax")):
             result.warnings.append("thresholds do not include a recognized zero-day score key")
 
     checkpoint_version = checkpoint.get("version")
@@ -135,6 +140,25 @@ def _positive_int(value: Any, name: str, result: ArtifactValidationResult) -> in
     try:
         parsed = int(value)
     except (TypeError, ValueError):
+        result.errors.append(f"{name} must be an integer")
+        return None
+    if parsed <= 0:
+        result.errors.append(f"{name} must be positive")
+        return None
+    return parsed
+
+
+def _positive_int_control(value: Any, name: str, result: ArtifactValidationResult) -> int | None:
+    if isinstance(value, bool):
+        result.errors.append(f"{name} must be an integer")
+        return None
+    try:
+        parsed = int(value)
+        numeric = float(value)
+    except (TypeError, ValueError):
+        result.errors.append(f"{name} must be an integer")
+        return None
+    if numeric != parsed:
         result.errors.append(f"{name} must be an integer")
         return None
     if parsed <= 0:

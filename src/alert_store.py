@@ -177,11 +177,17 @@ def list_alerts(db_path: str, limit: int = 200, status: str | None = None) -> li
 def update_alert_status(db_path: str, alert_id: str, status: str, analyst_note: str = "") -> None:
     init_alert_store(db_path)
     now = _utc_now()
+    alert_id = str(alert_id or "").strip()
+    if not alert_id:
+        raise ValueError("alert_id must not be empty")
+
     with closing(sqlite3.connect(db_path)) as conn:
-        conn.execute(
+        cursor = conn.execute(
             "UPDATE alerts SET status = ?, analyst_note = ?, updated_at = ? WHERE alert_id = ?",
             (status, analyst_note, now, alert_id),
         )
+        if cursor.rowcount == 0:
+            raise ValueError(f"alert not found: {alert_id}")
         conn.execute(
             """
             INSERT INTO alert_events(alert_id, created_at, event_type, payload_json)
